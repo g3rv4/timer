@@ -152,7 +152,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   width: 100%;
   background: rgba(17, 17, 17, 0.55);
   transform-origin: left center;
-  transform: scaleX(var(--p, 1));
+  transform: scaleX(var(--p, 0));
 }
 
 #flash {
@@ -272,7 +272,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     slots[0].classList.toggle('off', digits[0] === 0);
     shownDigits = digits;
 
-    fill.style.setProperty('--p', (ms / (TOTAL_SECONDS * 1000)).toFixed(4));
+    fill.style.setProperty('--p', (1 - ms / (TOTAL_SECONDS * 1000)).toFixed(4));
 
     const color = colorFor(ms);
     if (color !== shownColor) {
@@ -432,7 +432,60 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     render(remaining());
   });
 
-  // Input: one finger toggles, two fingers skip
+  // Input: one finger toggles, two fingers skip.
+  // Touch goes through touch events: iOS Safari drops pointer events once a
+  // second finger lands, so a two-finger tap never completed through them.
+
+  const TAP_MAX_MS = 800;
+  const TAP_MAX_MOVE_PX = 24;
+
+  let touchFingers = 0;
+  let touchStart = 0;
+  let touchMoved = false;
+  let touchIgnored = false;
+  const touchOrigins = new Map();
+
+  window.addEventListener('touchstart', (e) => {
+    if (touchFingers === 0) {
+      touchStart = now();
+      touchMoved = false;
+      touchIgnored = !!e.target.closest('#reset');
+      touchOrigins.clear();
+    }
+    if (touchIgnored) return;
+    e.preventDefault();
+    for (const t of e.changedTouches) touchOrigins.set(t.identifier, { x: t.clientX, y: t.clientY });
+    touchFingers = Math.max(touchFingers, e.touches.length);
+  }, { passive: false });
+
+  window.addEventListener('touchmove', (e) => {
+    if (touchIgnored) return;
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      const o = touchOrigins.get(t.identifier);
+      if (o && Math.hypot(t.clientX - o.x, t.clientY - o.y) > TAP_MAX_MOVE_PX) touchMoved = true;
+    }
+  }, { passive: false });
+
+  function endTouch(e, cancelled) {
+    if (touchIgnored) {
+      if (e.touches.length === 0) touchIgnored = false;
+      return;
+    }
+    e.preventDefault();
+    if (cancelled) touchMoved = true;
+    if (e.touches.length > 0) return;
+    const fingers = touchFingers;
+    touchFingers = 0;
+    if (touchMoved || now() - touchStart > TAP_MAX_MS) return;
+    if (fingers >= 2) skip();
+    else toggle();
+  }
+
+  window.addEventListener('touchend', (e) => endTouch(e, false), { passive: false });
+  window.addEventListener('touchcancel', (e) => endTouch(e, true), { passive: false });
+
+  // Mouse and pen go through pointer events.
 
   const pointers = new Map();
   let gestureFingers = 0;
@@ -440,7 +493,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   let gestureMoved = false;
 
   window.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('#reset')) return;
+    if (e.pointerType === 'touch' || e.target.closest('#reset')) return;
     if (pointers.size === 0) {
       gestureFingers = 0;
       gestureStart = now();
@@ -452,7 +505,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
 
   window.addEventListener('pointermove', (e) => {
     const p = pointers.get(e.pointerId);
-    if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > 24) gestureMoved = true;
+    if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > TAP_MAX_MOVE_PX) gestureMoved = true;
   });
 
   function endGesture(e, cancelled) {
@@ -460,7 +513,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     pointers.delete(e.pointerId);
     if (cancelled) gestureMoved = true;
     if (pointers.size > 0) return;
-    if (gestureMoved || now() - gestureStart > 600) return;
+    if (gestureMoved || now() - gestureStart > TAP_MAX_MS) return;
     if (gestureFingers >= 2) skip();
     else toggle();
   }
