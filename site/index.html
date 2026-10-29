@@ -33,8 +33,9 @@
                                    tap brings them back (and opens the picker otherwise).
     Control key                    open the page once as /?key=SECRET (the key stays in
                                    the URL so Add to Home Screen carries it), or two-finger
-                                   tap a view-only screen and type it; K on a keyboard.
-                                   Without it the page is view only: no buttons, taps ignored.
+                                   tap a view-only screen (buttons showing) and type it; K on
+                                   a keyboard. Without it the page is view only: just Mute
+                                   and Hide, taps ignored.
   On a phone the controls are a button row at the bottom.
   The timing constants are at the top of the script.
 -->
@@ -175,7 +176,8 @@ body[data-phase="running"] #hint { opacity: 0; }
 #buttons button:active { transform: scale(0.95); }
 #buttons button[aria-pressed="true"] { background: color-mix(in srgb, currentColor 30%, transparent); }
 body.hide-buttons #buttons { opacity: 0; pointer-events: none; }
-body.view-only #buttons, body.view-only #hint { display: none; }
+body.view-only #hint { display: none; }
+body.view-only #buttons button:not(#mute):not(#hide) { display: none; }
 body.view-only { cursor: default; }
 #viewonly {
   position: absolute;
@@ -946,8 +948,8 @@ body[data-mode="questions"] #bar { opacity: 0; }
   }
 
   function twoFingerTap() {
-    if (!canWrite) openKeyBox(false);
-    else if (buttonsHidden) setButtonsHidden(false);
+    if (buttonsHidden) setButtonsHidden(false);
+    else if (!canWrite) openKeyBox(false);
     else openPicker(false);
   }
 
@@ -1070,12 +1072,12 @@ body[data-mode="questions"] #bar { opacity: 0; }
     const k = e.key.toLowerCase();
     if (k === 'k') { openKeyBox(true); return; }
     if (k === 'm') { toggleMute(); return; }
+    if (k === 'h') { setButtonsHidden(!buttonsHidden); return; }
     if (!canWrite) return;
     if (k === 'arrowright' || k === 'n') { e.preventDefault(); openPicker(true); }
     else if (k === ' ' || k === 'enter') { e.preventDefault(); toggle(); }
     else if (k === 'r') reset();
     else if (k === 'q') questions();
-    else if (k === 'h') setButtonsHidden(!buttonsHidden);
   });
 
   // No pinch zoom, no long-press menu.
