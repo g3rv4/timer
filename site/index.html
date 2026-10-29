@@ -13,15 +13,16 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="icon" href="icon.png">
 <!--
-  A speaker gets SPEAK_SECONDS (5:00, green, yellow at 2:00 left), then a grace
-  countdown of GRACE_SECONDS (2:00, red, "Wrap up"), then the cutoff flows into
+  A speaker gets SPEAK_SECONDS (5:00, green, yellow at 2:00 left, red at 1:00
+  left), then a grace countdown of GRACE_SECONDS (2:00, "Wrap up", red and black
+  swapping every second), then the cutoff flows into
   a "Questions" count-up with no end.
 
   Controls
     Tap anywhere, Space or Enter   start, pause, resume.
     Questions button or Q          jump to the questions count-up, from anywhere.
     Reset button or R              back to the start.
-    Two-finger tap, N or Right     set the speaking clock: presets 5:00, 2:02,
+    Two-finger tap, N or Right     set the speaking clock: presets 5:00, 2:02, 1:02,
                                    0:02 and Cutoff 0:02, or type m:ss.
   The timing constants are at the top of the script.
 -->
@@ -55,6 +56,13 @@ body {
 body[data-color="green"]  { --bg: var(--green); }
 body[data-color="yellow"] { --bg: var(--yellow); }
 body[data-color="red"]    { --bg: var(--red); }
+body[data-color="wrap"]   { --bg: var(--red); }
+/* Wrap up: red on black and black on red swap every second while running. */
+body[data-color="wrap"][data-phase="running"] { animation: wrapFlash 2s steps(1, end) infinite; }
+@keyframes wrapFlash {
+  0%, 100% { background-color: var(--red); color: var(--ink); }
+  50% { background-color: #000; color: var(--red); }
+}
 body[data-color="blue"]   { --bg: var(--blue); --ink: #f8fafc; }
 
 #stage {
@@ -137,9 +145,9 @@ body[data-phase="running"] #hint { opacity: 0; }
   font: inherit;
   font-size: 1.9vw;
   font-weight: 700;
-  color: var(--ink);
-  background: color-mix(in srgb, var(--ink) 8%, transparent);
-  border: 0.14em solid color-mix(in srgb, var(--ink) 50%, transparent);
+  color: inherit;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  border: 0.14em solid color-mix(in srgb, currentColor 50%, transparent);
   border-radius: 999px;
   padding: 0.55em 1.3em;
   cursor: pointer;
@@ -157,13 +165,13 @@ body[data-mode="questions"] #questions { opacity: 0; pointer-events: none; }
   right: 0;
   bottom: 0;
   height: 1.4vh;
-  background: color-mix(in srgb, var(--ink) 12%, transparent);
+  background: color-mix(in srgb, currentColor 12%, transparent);
   transition: opacity 0.4s ease;
 }
 #fill {
   height: 100%;
   width: 100%;
-  background: color-mix(in srgb, var(--ink) 55%, transparent);
+  background: color-mix(in srgb, currentColor 55%, transparent);
   transform-origin: left center;
   transform: scaleX(var(--p, 0));
 }
@@ -273,6 +281,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
 @media (prefers-reduced-motion: reduce) {
   body, .slot, #hint, #buttons button, #bar { transition: none; }
   body[data-phase="paused"] #clock { animation: none; opacity: 0.6; }
+  body[data-color="wrap"][data-phase="running"] { animation: none; }
 }
 </style>
 </head>
@@ -310,6 +319,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
   const SPEAK_SECONDS = 5 * 60;       // what the speaker is told
   const GRACE_SECONDS = 2 * 60;       // "Wrap up" countdown after that; the cutoff ends it
   const YELLOW_AT_SECONDS = 2 * 60;   // remaining on the speaking clock when it turns yellow
+  const RED_AT_SECONDS = 1 * 60;      // remaining on the speaking clock when it turns red
   // Time picker presets sit this many seconds before each event.
   const PRESET_MARGIN_SECONDS = 2;
 
@@ -362,8 +372,11 @@ body[data-mode="questions"] #bar { opacity: 0; }
 
   function colorFor(e, mode) {
     if (mode === 'questions') return 'blue';
-    if (mode === 'grace') return 'red';
-    return SPEAK_MS - e <= YELLOW_AT_SECONDS * 1000 ? 'yellow' : 'green';
+    if (mode === 'grace') return 'wrap';  // red too, but its own key so the grace start is a crossing
+    const left = SPEAK_MS - e;
+    if (left <= RED_AT_SECONDS * 1000) return 'red';
+    if (left <= YELLOW_AT_SECONDS * 1000) return 'yellow';
+    return 'green';
   }
 
   // Display
@@ -420,8 +433,8 @@ body[data-mode="questions"] #bar { opacity: 0; }
       body.dataset.color = color;
       if (crossed && opts.pulse) pulse();
       if (crossed && opts.sound) {
-        if (color === 'yellow') ding();
-        else if (color === 'red') chime();
+        if (color === 'yellow' || color === 'red') ding();
+        else if (color === 'wrap') chime();
         else if (color === 'blue') longChime();
       }
     }
@@ -543,6 +556,8 @@ body[data-mode="questions"] #bar { opacity: 0; }
     { text: formatTime(SPEAK_SECONDS), elapsed: 0 },
     { text: formatTime(YELLOW_AT_SECONDS + PRESET_MARGIN_SECONDS),
       elapsed: (SPEAK_SECONDS - YELLOW_AT_SECONDS - PRESET_MARGIN_SECONDS) * 1000 },
+    { text: formatTime(RED_AT_SECONDS + PRESET_MARGIN_SECONDS),
+      elapsed: (SPEAK_SECONDS - RED_AT_SECONDS - PRESET_MARGIN_SECONDS) * 1000 },
     { text: formatTime(PRESET_MARGIN_SECONDS), elapsed: (SPEAK_SECONDS - PRESET_MARGIN_SECONDS) * 1000 },
     { text: `Cutoff ${formatTime(PRESET_MARGIN_SECONDS)}`,
       elapsed: (SPEAK_SECONDS + GRACE_SECONDS - PRESET_MARGIN_SECONDS) * 1000 },
@@ -586,7 +601,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
   picker.addEventListener('click', (e) => { if (e.target === picker) closePicker(); });
 
   // Sound. Three tones are rendered once into WAVs and played through one
-  // <audio> element: a soft ding at yellow, a chime when the grace starts, and
+  // <audio> element: a soft ding at yellow and at red, a chime when the grace starts, and
   // a longer chime at the cutoff. iOS lets a media element that a tap started
   // be replayed later without a gesture, and media playback ignores silent
   // mode, which Web Audio output does not.
