@@ -230,7 +230,6 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   let shownDigits = [];
   let shownColor = null;
   let wakeLock = null;
-  let audioCtx = null;
 
   const now = () => performance.now();
   const remaining = () => (phase === 'running' ? Math.max(0, endAt - now()) : remainingMs);
@@ -376,34 +375,76 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     render(remaining());
   }
 
-  // Sound
+  // Sound. The chime is rendered once into a WAV and played through an
+  // <audio> element. iOS lets a media element that a tap started be replayed
+  // later without a gesture, and media playback ignores silent mode, which
+  // Web Audio output does not.
 
+  const CHIME_NOTES = [523.25, 659.25, 783.99, 1046.5];  // C5 E5 G5 C6
+  const CHIME_LEAD_S = 0.25;  // silence before the first note, so the unlock play+pause stays inaudible
+  let bell = null;
+  let bellUrl = null;
+  let bellReady = false;
+
+  function renderChime() {
+    const rate = 22050;
+    const gap = 0.28;
+    const last = CHIME_NOTES.length - 1;
+    const n = Math.ceil((CHIME_LEAD_S + last * gap + 1.8 + 0.2) * rate);
+    const samples = new Float32Array(n);
+    CHIME_NOTES.forEach((freq, i) => {
+      const t0 = CHIME_LEAD_S + i * gap;
+      const dur = i === last ? 1.8 : 0.7;
+      const s0 = Math.floor(t0 * rate);
+      const s1 = Math.min(n, Math.floor((t0 + dur) * rate));
+      for (let s = s0; s < s1; s++) {
+        const t = (s - s0) / rate;
+        const attack = Math.min(1, t / 0.02);
+        const decay = Math.pow(0.0002, t / dur);
+        samples[s] += 0.6 * attack * decay * Math.sin(2 * Math.PI * freq * t);
+      }
+    });
+    const view = new DataView(new ArrayBuffer(44 + n * 2));
+    const tag = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+    tag(0, 'RIFF'); view.setUint32(4, 36 + n * 2, true); tag(8, 'WAVE');
+    tag(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+    view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+    tag(36, 'data'); view.setUint32(40, n * 2, true);
+    for (let s = 0; s < n; s++) view.setInt16(44 + s * 2, Math.max(-1, Math.min(1, samples[s])) * 32767, true);
+    return URL.createObjectURL(new Blob([view.buffer], { type: 'audio/wav' }));
+  }
+
+  function getBell() {
+    if (!bell) {
+      bellUrl = renderChime();
+      bell = new Audio(bellUrl);
+      bell.preload = 'auto';
+      bell.setAttribute('playsinline', '');
+      bell.load();
+    }
+    return bell;
+  }
+
+  // Runs inside the start tap: starts the element during the gesture and stops
+  // it again inside the leading silence. From then on play() works any time.
   function unlockAudio() {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return;
-    if (!audioCtx) audioCtx = new Ctx();
-    if (audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
+    const el = getBell();
+    if (bellReady) return;
+    const started = el.play();
+    if (!started) return;
+    started.then(() => {
+      el.pause();
+      el.currentTime = 0;
+      bellReady = true;
+    }).catch(() => {});
   }
 
   function chime() {
-    unlockAudio();
-    if (!audioCtx) return;
-    const t0 = audioCtx.currentTime + 0.05;
-    const notes = [523.25, 659.25, 783.99, 1046.5];  // C5 E5 G5 C6
-    notes.forEach((freq, i) => {
-      const t = t0 + i * 0.28;
-      const dur = i === notes.length - 1 ? 1.8 : 0.7;
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(0.6, t + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      osc.connect(gain).connect(audioCtx.destination);
-      osc.start(t);
-      osc.stop(t + dur + 0.05);
-    });
+    const el = getBell();
+    // Re-setting src before play() is the workaround for WebKit bug 295518:
+    // home-screen apps on iOS 26.0/26.1 otherwise go silent after a relaunch.
+    el.src = bellUrl;
+    el.play().catch(() => {});
   }
 
   // Keep the screen on while running
@@ -539,6 +580,11 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   document.addEventListener('gesturestart', (e) => e.preventDefault());
   document.addEventListener('contextmenu', (e) => e.preventDefault());
 
+  // iOS 17+: put the page on the media channel so silent mode does not mute it.
+  if (navigator.audioSession) {
+    try { navigator.audioSession.type = 'playback'; } catch (_) { /* older WebKit */ }
+  }
+  getBell();
   render(remainingMs);
 })();
 </script>
