@@ -15,8 +15,12 @@
 <!--
   A speaker gets SPEAK_SECONDS (5:00, green, yellow at 2:00 left, red at 1:00
   left), then a grace countdown of GRACE_SECONDS (2:00, "Wrap up", a slow
-  breathing red), then the cutoff flows into
-  a "Questions" count-up with no end.
+  breathing red), then the cutoff flows into a "Questions" count-up with no end.
+
+  The state lives in a Durable Object (src/worker.js) reached over a WebSocket
+  at /ws, so every open copy of the page shows the same thing and any of them
+  can control it. Open it through the Worker (npx wrangler dev locally), not as
+  a file.
 
   Controls
     Tap anywhere, Space or Enter   start, pause, resume.
@@ -24,6 +28,10 @@
     Reset button or R              back to the start.
     Two-finger tap, N or Right     set the speaking clock: presets 5:00, 2:02, 1:02,
                                    0:02 and Cutoff 0:02, or type m:ss.
+    Mute button                    silence this device only.
+    Hide button or H               hide the buttons on this device; a two-finger
+                                   tap brings them back (and opens the picker otherwise).
+  On a phone the controls are a button row at the bottom.
   The timing constants are at the top of the script.
 -->
 <style>
@@ -82,7 +90,7 @@ body[data-color="blue"]   { --bg: var(--blue); --ink: #f8fafc; }
 #label {
   min-height: 1.3em;
   margin-bottom: 1vh;
-  font-size: 2.8vw;
+  font-size: max(2.8vw, 16px);
   font-weight: 700;
   letter-spacing: 0.04em;
   opacity: 0.75;
@@ -132,7 +140,7 @@ body[data-phase="paused"] #clock { animation: dim 2.4s ease-in-out infinite; }
   right: 0;
   bottom: calc(9vh + env(safe-area-inset-bottom));
   text-align: center;
-  font-size: 2.4vw;
+  font-size: max(2.4vw, 15px);
   font-weight: 600;
   letter-spacing: 0.02em;
   opacity: 0.65;
@@ -149,7 +157,7 @@ body[data-phase="running"] #hint { opacity: 0; }
 }
 #buttons button {
   font: inherit;
-  font-size: 1.9vw;
+  font-size: max(1.9vw, 14px);
   font-weight: 700;
   color: inherit;
   background: color-mix(in srgb, currentColor 8%, transparent);
@@ -161,9 +169,22 @@ body[data-phase="running"] #hint { opacity: 0; }
     border-color var(--fade) ease, background-color var(--fade) ease;
 }
 #buttons button:active { transform: scale(0.95); }
+#buttons button[aria-pressed="true"] { background: color-mix(in srgb, currentColor 30%, transparent); }
+body.hide-buttons #buttons { opacity: 0; pointer-events: none; }
+.narrow { display: none; }
 body[data-phase="running"] #reset,
 body.fresh #reset,
 body[data-mode="questions"] #questions { opacity: 0; pointer-events: none; }
+
+#link {
+  position: absolute;
+  left: calc(2vw + env(safe-area-inset-left));
+  bottom: calc(3vh + env(safe-area-inset-bottom));
+  font-size: max(1.6vw, 13px);
+  font-weight: 600;
+  opacity: 0.7;
+}
+#link.on { display: none; }
 
 #bar {
   position: absolute;
@@ -208,18 +229,18 @@ body[data-mode="questions"] #bar { opacity: 0; }
   background: #fff;
   color: #111111;
   box-shadow: 0 2vh 6vh rgba(0, 0, 0, 0.3);
-  font-size: 2vw;
+  font-size: max(2vw, 15px);
 }
 #picker h2 {
-  font-size: 2.4vw;
+  font-size: max(2.4vw, 19px);
   font-weight: 800;
   margin-bottom: 1.6vw;
 }
 #presets {
   display: flex;
   flex-wrap: wrap;
-  gap: 1vw;
-  margin-bottom: 2vw;
+  gap: max(1vw, 8px);
+  margin-bottom: max(2vw, 14px);
 }
 #picker button {
   font: inherit;
@@ -234,17 +255,18 @@ body[data-mode="questions"] #bar { opacity: 0; }
 }
 #picker button:active { transform: scale(0.96); }
 #presets button {
-  font-size: 2.6vw;
+  font-size: max(2.6vw, 18px);
   font-variant-numeric: tabular-nums;
 }
 #picker .row {
   display: flex;
   align-items: center;
-  gap: 1vw;
+  flex-wrap: wrap;
+  gap: max(1vw, 8px);
 }
 #pickerInput {
   font: inherit;
-  font-size: 2.6vw;
+  font-size: max(2.6vw, 20px);
   font-variant-numeric: tabular-nums;
   width: 7ch;
   padding: 0.35em 0.5em;
@@ -258,19 +280,19 @@ body[data-mode="questions"] #bar { opacity: 0; }
 }
 #pickerInput:focus { outline: 0.2em solid var(--green); }
 #pickerHelp {
-  margin-top: 1.2vw;
-  font-size: 1.7vw;
+  margin-top: max(1.2vw, 10px);
+  font-size: max(1.7vw, 13px);
   opacity: 0.7;
 }
 #pickerError {
   margin-top: 0.6vw;
-  font-size: 1.7vw;
+  font-size: max(1.7vw, 13px);
   color: var(--red);
   min-height: 1.2em;
 }
 
 #rotate { display: none; }
-@media (orientation: portrait) {
+@media (orientation: portrait) and (min-width: 761px) {
   #rotate {
     display: block;
     position: absolute;
@@ -282,6 +304,32 @@ body[data-mode="questions"] #bar { opacity: 0; }
     font-weight: 600;
     opacity: 0.6;
   }
+}
+
+/* Phones: the clock fills the width and the controls become a row at the bottom. */
+@media (max-width: 760px) {
+  #stage { bottom: 22vh; }
+  #clock { font-size: min(26vw, 34vh); }
+  #hint { bottom: calc(23vh + env(safe-area-inset-bottom)); }
+  #buttons {
+    top: auto;
+    right: auto;
+    left: 0;
+    bottom: calc(4vh + env(safe-area-inset-bottom));
+    width: 100%;
+    padding: 0 4vw;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  #buttons button { font-size: 16px; padding: 0.7em 1em; min-height: 44px; }
+  .narrow { display: inline-block; }
+  body[data-phase="running"] #reset,
+  body.fresh #reset,
+  body[data-mode="questions"] #questions { display: none; }
+  body.hide-buttons #buttons { display: none; }
+  #link { bottom: calc(14vh + env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; }
+  #picker form { width: 92vw; padding: 5vw; border-radius: 16px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -299,9 +347,14 @@ body[data-mode="questions"] #bar { opacity: 0; }
 </main>
 <p id="hint">Tap to start</p>
 <div id="buttons">
+  <button id="toggle" type="button" class="narrow">Start</button>
   <button id="questions" type="button">Questions</button>
   <button id="reset" type="button">Reset</button>
+  <button id="settime" type="button" class="narrow">Set time</button>
+  <button id="mute" type="button" aria-pressed="false">Mute</button>
+  <button id="hide" type="button">Hide</button>
 </div>
+<p id="link">Connecting</p>
 <div id="bar"><div id="fill"></div></div>
 <div id="flash"></div>
 <p id="rotate">Rotate to landscape</p>
@@ -322,7 +375,8 @@ body[data-mode="questions"] #bar { opacity: 0; }
 (() => {
   'use strict';
 
-  // Timing. Edit these and redeploy.
+  // Timing. Edit these and redeploy. The server stores only timestamps, so
+  // these live here alone.
   const SPEAK_SECONDS = 5 * 60;       // what the speaker is told
   const GRACE_SECONDS = 2 * 60;       // "Wrap up" countdown after that; the cutoff ends it
   const YELLOW_AT_SECONDS = 2 * 60;   // remaining on the speaking clock when it turns yellow
@@ -340,6 +394,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
     paused: 'Paused. Tap to resume.',
   };
   const LABELS = { speaking: '', grace: 'Wrap up', questions: 'Questions' };
+  const TOGGLE_TEXT = { idle: 'Start', running: 'Pause', paused: 'Resume' };
 
   const body = document.body;
   const clock = document.getElementById('clock');
@@ -348,8 +403,13 @@ body[data-mode="questions"] #bar { opacity: 0; }
   const hint = document.getElementById('hint');
   const fill = document.getElementById('fill');
   const flash = document.getElementById('flash');
+  const link = document.getElementById('link');
+  const toggleBtn = document.getElementById('toggle');
   const resetBtn = document.getElementById('reset');
   const questionsBtn = document.getElementById('questions');
+  const setTimeBtn = document.getElementById('settime');
+  const muteBtn = document.getElementById('mute');
+  const hideBtn = document.getElementById('hide');
   const picker = document.getElementById('picker');
   const pickerForm = document.getElementById('pickerForm');
   const pickerInput = document.getElementById('pickerInput');
@@ -357,19 +417,19 @@ body[data-mode="questions"] #bar { opacity: 0; }
   const presets = document.getElementById('presets');
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  let phase = 'idle';        // idle | running | paused
-  let elapsedMs = 0;         // authoritative while not running; negative after a picker value above SPEAK
-  let startAt = 0;           // now() minus elapsed, while running
-  let questionsAt = null;    // elapsed at which questions began, once they have
-  let barStartMs = 0;        // elapsed at which the progress bar is empty
+  // Shared state, mirrored from the server. Every device renders from the same
+  // timestamps, so they agree to within the clock offset measured below.
+  let state = { phase: 'idle', startedAt: null, elapsedMs: 0, questionsAt: null, barStartMs: 0 };
+  let clockOffset = 0;  // server clock minus ours, in ms
   let rafId = 0;
   let shownDigits = [];
   let shownColor = null;
   let wakeLock = null;
 
   const now = () => performance.now();
-  const elapsed = () => (phase === 'running' ? now() - startAt : elapsedMs);
-  const questionsStart = () => (questionsAt === null ? CUTOFF_MS : questionsAt);
+  const serverNow = () => Date.now() + clockOffset;
+  const elapsed = () => (state.phase === 'running' ? serverNow() - state.startedAt : state.elapsedMs);
+  const questionsStart = () => (state.questionsAt === null ? CUTOFF_MS : state.questionsAt);
 
   function modeFor(e) {
     if (e >= questionsStart()) return 'questions';
@@ -403,7 +463,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
   }
 
   // What a color change does: a live crossing sounds and pulses, a jump only
-  // pulses, a reset does neither.
+  // pulses, a reset or a fresh connection does neither.
   const LIVE = { sound: true, pulse: true };
   const JUMP = { sound: false, pulse: true };
   const QUIET = { sound: false, pulse: false };
@@ -430,7 +490,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
     body.dataset.mode = mode;
     label.textContent = LABELS[mode];
 
-    const p = (e - barStartMs) / (CUTOFF_MS - barStartMs);
+    const p = (e - state.barStartMs) / (CUTOFF_MS - state.barStartMs);
     fill.style.setProperty('--p', Math.max(0, Math.min(1, p)).toFixed(4));
 
     const color = colorFor(e, mode);
@@ -467,82 +527,139 @@ body[data-mode="questions"] #bar { opacity: 0; }
     );
   }
 
-  function setPhase(next) {
-    phase = next;
-    body.dataset.phase = next;
-    hint.textContent = HINTS[next];
+  function reflectPhase() {
+    body.dataset.phase = state.phase;
+    hint.textContent = HINTS[state.phase];
+    toggleBtn.textContent = TOGGLE_TEXT[state.phase];
+    body.classList.toggle('fresh', state.phase === 'idle' && state.elapsedMs === 0 && state.questionsAt === null);
   }
-
-  // State machine
 
   function tick() {
-    if (phase !== 'running') return;
-    const e = elapsed();
-    if (questionsAt === null && e >= CUTOFF_MS) questionsAt = CUTOFF_MS;
-    render(e);
+    if (state.phase !== 'running') return;
+    render(elapsed());
     rafId = requestAnimationFrame(tick);
   }
 
-  function start() {
+  // A broadcast from the server: adopt the state and render it. The cause
+  // decides whether a color change may sound.
+  function applyState(msg) {
+    state = msg.state;
+    const cause = msg.cause;
+    const opts = cause === 'set' || cause === 'questions' ? JUMP
+      : cause === 'start' || cause === 'pause' ? LIVE
+      : QUIET;
+    reflectPhase();
+    if (cause === 'start' || cause === 'pause') bounce();
+    cancelAnimationFrame(rafId);
+    render(elapsed(), opts);
+    if (state.phase === 'running') {
+      requestWakeLock();
+      rafId = requestAnimationFrame(tick);
+    } else {
+      releaseWakeLock();
+    }
+  }
+
+  // Actions. Each one goes to the server; the display changes when the
+  // broadcast comes back. The bounce is immediate feedback for the tap.
+
+  function toggle() {
     unlockAudio();
-    startAt = now() - elapsedMs;
-    setPhase('running');
-    body.classList.remove('fresh');
     bounce();
-    requestWakeLock();
-    cancelAnimationFrame(rafId);
-    rafId = requestAnimationFrame(tick);
-  }
-
-  function pause() {
-    elapsedMs = elapsed();
-    cancelAnimationFrame(rafId);
-    setPhase('paused');
-    bounce();
-    releaseWakeLock();
-    render(elapsedMs);
+    send({ type: state.phase === 'running' ? 'pause' : 'start' });
   }
 
   function reset() {
-    cancelAnimationFrame(rafId);
     closePicker();
-    elapsedMs = 0;
-    questionsAt = null;
-    barStartMs = 0;
-    setPhase('idle');
-    body.classList.add('fresh');
-    releaseWakeLock();
-    render(0, QUIET);
-  }
-
-  function toggle() {
-    if (phase === 'running') pause();
-    else start();
+    send({ type: 'reset' });
   }
 
   // Jump to the questions count-up from anywhere, without the cutoff chime.
   function questions() {
     closePicker();
-    const e = elapsed();
-    if (modeFor(e) === 'questions') return;
-    questionsAt = e;
-    body.classList.remove('fresh');
-    render(e, JUMP);
-    if (phase !== 'running') start();
+    unlockAudio();
+    if (modeFor(elapsed()) === 'questions') return;
+    send({ type: 'questions' });
   }
 
   // Move the clock to a point in the run, without any sound.
   function applyElapsed(e) {
-    questionsAt = null;
-    if (phase === 'running') startAt = now() - e;
-    else elapsedMs = e;
-    barStartMs = Math.min(0, e);
-    body.classList.remove('fresh');
     closePicker();
-    render(elapsed(), JUMP);
+    send({ type: 'set', elapsedMs: e });
   }
 
-  // Time picker (two-finger tap, N or Right arrow)
+  // The link to the shared state
+
+  let socket = null;
+  let retryMs = 500;
+  let retryTimer = 0;
+  let bestRtt = Infinity;
+  let bestRttAt = 0;
+
+  function connect() {
+    clearTimeout(retryTimer);
+    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+    const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${scheme}://${location.host}/ws`);
+    socket = ws;
+    ws.onopen = () => {
+      retryMs = 500;
+      link.classList.add('on');
+      ping();
+    };
+    ws.onmessage = (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch (_) { return; }
+      if (msg.type === 'pong') takeOffset(msg);
+      else if (msg.type === 'state') {
+        if (bestRtt === Infinity) clockOffset = msg.now - Date.now();  // rough, until the first pong
+        applyState(msg);
+      }
+    };
+    ws.onclose = () => {
+      if (socket !== ws) return;
+      socket = null;
+      link.textContent = 'Reconnecting';
+      link.classList.remove('on');
+      retryTimer = setTimeout(connect, retryMs);
+      retryMs = Math.min(retryMs * 2, 10000);
+    };
+    ws.onerror = () => ws.close();
+  }
+
+  function send(msg) {
+    if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
+    else connect();
+  }
+
+  function ping() {
+    send({ type: 'ping', t: Date.now() });
+  }
+
+  // Keep the lowest-round-trip sample; refresh it every couple of minutes.
+  function takeOffset(msg) {
+    const rtt = Date.now() - msg.t;
+    const sample = msg.now + rtt / 2 - Date.now();
+    if (rtt <= bestRtt || Date.now() - bestRttAt > 120000) {
+      bestRtt = rtt;
+      bestRttAt = Date.now();
+      clockOffset = sample;
+    }
+  }
+
+  setInterval(ping, 15000);
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    connect();
+    ping();
+    if (state.phase !== 'running') return;
+    if (!wakeLock) requestWakeLock();
+    cancelAnimationFrame(rafId);
+    tick();
+  });
+
+  // Time picker (two-finger tap, N, Right arrow, or the Set time button)
 
   function formatTime(sec) {
     return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
@@ -608,10 +725,10 @@ body[data-mode="questions"] #bar { opacity: 0; }
   picker.addEventListener('click', (e) => { if (e.target === picker) closePicker(); });
 
   // Sound. Three tones are rendered once into WAVs and played through one
-  // <audio> element: a soft ding at yellow and at red, a chime when the grace starts, and
-  // a longer chime at the cutoff. iOS lets a media element that a tap started
-  // be replayed later without a gesture, and media playback ignores silent
-  // mode, which Web Audio output does not.
+  // <audio> element: a soft ding at yellow and at red, a chime when the grace
+  // starts, and a longer chime at the cutoff. iOS lets a media element that a
+  // tap started be replayed later without a gesture, and media playback
+  // ignores silent mode, which Web Audio output does not. Mute is per device.
 
   const CHIME_NOTES = [523.25, 659.25, 783.99, 1046.5];  // C5 E5 G5 C6
   const CHIME_LEAD_S = 0.25;  // silence before the first note, so the unlock play+pause stays inaudible
@@ -621,6 +738,8 @@ body[data-mode="questions"] #bar { opacity: 0; }
   let chimeUrl = null;
   let longChimeUrl = null;
   let bellReady = false;
+  let muted = false;
+  try { muted = localStorage.getItem('timer.muted') === '1'; } catch (_) { /* private mode */ }
 
   // notes: [{ freq, at, dur, gain }], seconds after the lead-in silence.
   function renderTone(notes, leadS) {
@@ -667,8 +786,8 @@ body[data-mode="questions"] #bar { opacity: 0; }
     return bell;
   }
 
-  // Runs inside the start tap: starts the element during the gesture and stops
-  // it again inside the leading silence. From then on play() works any time.
+  // Runs inside a tap: starts the element during the gesture and stops it
+  // again inside the leading silence. From then on play() works any time.
   function unlockAudio() {
     const el = getBell();
     if (bellReady) return;
@@ -682,6 +801,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
   }
 
   function playTone(url) {
+    if (muted) return;
     const el = getBell();
     // Re-setting src before play() is the workaround for WebKit bug 295518:
     // home-screen apps on iOS 26.0/26.1 otherwise go silent after a relaunch.
@@ -693,13 +813,18 @@ body[data-mode="questions"] #bar { opacity: 0; }
   function chime() { playTone(chimeUrl); }
   function longChime() { playTone(longChimeUrl); }
 
+  function reflectMute() {
+    muteBtn.textContent = muted ? 'Unmute' : 'Mute';
+    muteBtn.setAttribute('aria-pressed', String(muted));
+  }
+
   // Keep the screen on while running
 
   async function requestWakeLock() {
     if (!('wakeLock' in navigator)) return;
     try {
       const lock = await navigator.wakeLock.request('screen');
-      if (phase !== 'running') { lock.release().catch(() => {}); return; }
+      if (state.phase !== 'running') { lock.release().catch(() => {}); return; }
       wakeLock = lock;
       lock.addEventListener('release', () => { if (wakeLock === lock) wakeLock = null; });
     } catch (_) {
@@ -713,13 +838,23 @@ body[data-mode="questions"] #bar { opacity: 0; }
     wakeLock = null;
   }
 
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'visible' || phase !== 'running') return;
-    if (!wakeLock) requestWakeLock();
-    tick();
-  });
+  // Hidden buttons, per device. A two-finger tap brings them back.
 
-  // Input: one finger toggles, two fingers open the picker.
+  let buttonsHidden = false;
+  try { buttonsHidden = localStorage.getItem('timer.hideButtons') === '1'; } catch (_) { /* private mode */ }
+
+  function setButtonsHidden(hidden) {
+    buttonsHidden = hidden;
+    body.classList.toggle('hide-buttons', hidden);
+    try { localStorage.setItem('timer.hideButtons', hidden ? '1' : '0'); } catch (_) { /* private mode */ }
+  }
+
+  function twoFingerTap() {
+    if (buttonsHidden) setButtonsHidden(false);
+    else openPicker(false);
+  }
+
+  // Input: one finger toggles, two fingers bring the buttons back or open the picker.
   // Touch goes through touch events: iOS Safari drops pointer events once a
   // second finger lands, so a two-finger tap never completed through them.
 
@@ -766,7 +901,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
     const fingers = touchFingers;
     touchFingers = 0;
     if (touchMoved || now() - touchStart > TAP_MAX_MS) return;
-    if (fingers >= 2) openPicker(false);
+    if (fingers >= 2) twoFingerTap();
     else toggle();
   }
 
@@ -802,23 +937,30 @@ body[data-mode="questions"] #bar { opacity: 0; }
     if (cancelled) gestureMoved = true;
     if (pointers.size > 0) return;
     if (gestureMoved || now() - gestureStart > TAP_MAX_MS) return;
-    if (gestureFingers >= 2) openPicker(false);
+    if (gestureFingers >= 2) twoFingerTap();
     else toggle();
   }
 
   window.addEventListener('pointerup', (e) => endGesture(e, false));
   window.addEventListener('pointercancel', (e) => endGesture(e, true));
 
-  resetBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    resetBtn.blur();
-    reset();
-  });
-
-  questionsBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    questionsBtn.blur();
-    questions();
+  function onButton(btn, action) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      btn.blur();
+      action();
+    });
+  }
+  onButton(toggleBtn, toggle);
+  onButton(resetBtn, reset);
+  onButton(questionsBtn, questions);
+  onButton(setTimeBtn, () => { unlockAudio(); openPicker(false); });
+  onButton(hideBtn, () => setButtonsHidden(true));
+  onButton(muteBtn, () => {
+    muted = !muted;
+    try { localStorage.setItem('timer.muted', muted ? '1' : '0'); } catch (_) { /* private mode */ }
+    reflectMute();
+    unlockAudio();
   });
 
   window.addEventListener('keydown', (e) => {
@@ -832,6 +974,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
     else if (k === ' ' || k === 'enter') { e.preventDefault(); toggle(); }
     else if (k === 'r') reset();
     else if (k === 'q') questions();
+    else if (k === 'h') setButtonsHidden(!buttonsHidden);
   });
 
   // No pinch zoom, no long-press menu.
@@ -843,7 +986,11 @@ body[data-mode="questions"] #bar { opacity: 0; }
     try { navigator.audioSession.type = 'playback'; } catch (_) { /* older WebKit */ }
   }
   getBell();
+  reflectMute();
+  setButtonsHidden(buttonsHidden);
+  reflectPhase();
   render(0, QUIET);
+  connect();
 })();
 </script>
 </body>
