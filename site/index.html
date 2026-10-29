@@ -13,10 +13,16 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="icon" href="icon.png">
 <!--
+  A speaker gets SPEAK_SECONDS (5:00, green, yellow at 2:00 left), then a grace
+  countdown of GRACE_SECONDS (2:00, red, "Wrap up"), then the cutoff flows into
+  a "Questions" count-up with no end.
+
   Controls
-    Tap anywhere, Space or Enter   start, pause, resume. At 0:00 it resets.
-    Reset button or R              back to 10:00.
-    Two-finger tap, N or Right     set the time: presets 10:00, 5:02, 2:32, 0:02, or type m:ss.
+    Tap anywhere, Space or Enter   start, pause, resume.
+    Questions button or Q          jump to the questions count-up, from anywhere.
+    Reset button or R              back to the start.
+    Two-finger tap, N or Right     set the speaking clock: presets 5:00, 2:02,
+                                   0:02 and Cutoff 0:02, or type m:ss.
   The timing constants are at the top of the script.
 -->
 <style>
@@ -24,7 +30,7 @@
   --green: #2ecc71;
   --yellow: #f5c518;
   --red: #e5473a;
-  --red-deep: #b3271c;
+  --blue: #1e3a8a;
   --ink: #111111;
   --bg: var(--green);
   --fade: 1.5s;
@@ -43,24 +49,29 @@ body {
   user-select: none;
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
-  transition: background-color var(--fade) ease;
+  transition: background-color var(--fade) ease, color var(--fade) ease;
   cursor: pointer;
 }
 body[data-color="green"]  { --bg: var(--green); }
 body[data-color="yellow"] { --bg: var(--yellow); }
 body[data-color="red"]    { --bg: var(--red); }
-body[data-phase="done"] { animation: breathe 1.4s ease-in-out infinite; }
-@keyframes breathe {
-  0%, 100% { background-color: var(--red); }
-  50% { background-color: var(--red-deep); }
-}
+body[data-color="blue"]   { --bg: var(--blue); --ink: #f8fafc; }
 
 #stage {
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+}
+#label {
+  min-height: 1.3em;
+  margin-bottom: 1vh;
+  font-size: 2.8vw;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
 }
 #clock {
   display: flex;
@@ -100,11 +111,6 @@ body[data-phase="paused"] #clock { animation: dim 2.4s ease-in-out infinite; }
   0%, 100% { opacity: 0.5; }
   50% { opacity: 0.85; }
 }
-body[data-phase="done"] #clock { animation: heartbeat 1.4s ease-in-out infinite; }
-@keyframes heartbeat {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.05); }
-}
 
 #hint {
   position: absolute;
@@ -120,24 +126,30 @@ body[data-phase="done"] #clock { animation: heartbeat 1.4s ease-in-out infinite;
 }
 body[data-phase="running"] #hint { opacity: 0; }
 
-#reset {
+#buttons {
   position: absolute;
   top: calc(3vh + env(safe-area-inset-top));
   right: calc(3vw + env(safe-area-inset-right));
+  display: flex;
+  gap: 1vw;
+}
+#buttons button {
   font: inherit;
   font-size: 1.9vw;
   font-weight: 700;
   color: var(--ink);
-  background: rgba(17, 17, 17, 0.08);
-  border: 0.14em solid rgba(17, 17, 17, 0.5);
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  border: 0.14em solid color-mix(in srgb, var(--ink) 50%, transparent);
   border-radius: 999px;
   padding: 0.55em 1.3em;
   cursor: pointer;
-  transition: opacity 0.4s ease, transform 0.15s ease;
+  transition: opacity 0.4s ease, transform 0.15s ease, color var(--fade) ease,
+    border-color var(--fade) ease, background-color var(--fade) ease;
 }
-#reset:active { transform: scale(0.95); }
+#buttons button:active { transform: scale(0.95); }
 body[data-phase="running"] #reset,
-body.fresh #reset { opacity: 0; pointer-events: none; }
+body.fresh #reset,
+body[data-mode="questions"] #questions { opacity: 0; pointer-events: none; }
 
 #bar {
   position: absolute;
@@ -145,15 +157,17 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   right: 0;
   bottom: 0;
   height: 1.4vh;
-  background: rgba(17, 17, 17, 0.12);
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+  transition: opacity 0.4s ease;
 }
 #fill {
   height: 100%;
   width: 100%;
-  background: rgba(17, 17, 17, 0.55);
+  background: color-mix(in srgb, var(--ink) 55%, transparent);
   transform-origin: left center;
   transform: scaleX(var(--p, 0));
 }
+body[data-mode="questions"] #bar { opacity: 0; }
 
 #flash {
   position: absolute;
@@ -178,7 +192,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   padding: 3vw;
   border-radius: 1.6vw;
   background: #fff;
-  color: var(--ink);
+  color: #111111;
   box-shadow: 0 2vh 6vh rgba(0, 0, 0, 0.3);
   font-size: 2vw;
 }
@@ -196,7 +210,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
 #picker button {
   font: inherit;
   font-weight: 700;
-  color: var(--ink);
+  color: #111111;
   background: rgba(17, 17, 17, 0.06);
   border: 0.12em solid rgba(17, 17, 17, 0.5);
   border-radius: 999px;
@@ -221,7 +235,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   width: 7ch;
   padding: 0.35em 0.5em;
   text-align: center;
-  color: var(--ink);
+  color: #111111;
   background: #fff;
   border: 0.12em solid rgba(17, 17, 17, 0.5);
   border-radius: 0.5em;
@@ -257,26 +271,27 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  body, .slot, #hint, #reset { transition: none; }
-  body[data-phase="done"],
-  body[data-phase="paused"] #clock,
-  body[data-phase="done"] #clock { animation: none; }
-  body[data-phase="paused"] #clock { opacity: 0.6; }
+  body, .slot, #hint, #buttons button, #bar { transition: none; }
+  body[data-phase="paused"] #clock { animation: none; opacity: 0.6; }
 }
 </style>
 </head>
-<body data-phase="idle" class="fresh">
+<body data-phase="idle" data-mode="speaking" data-color="green" class="fresh">
 <main id="stage">
+  <p id="label"></p>
   <div id="clock"><span class="slot"></span><span class="slot"></span><span class="colon">:</span><span class="slot"></span><span class="slot"></span></div>
 </main>
 <p id="hint">Tap to start</p>
-<button id="reset" type="button">Reset</button>
+<div id="buttons">
+  <button id="questions" type="button">Questions</button>
+  <button id="reset" type="button">Reset</button>
+</div>
 <div id="bar"><div id="fill"></div></div>
 <div id="flash"></div>
 <p id="rotate">Rotate to landscape</p>
 <div id="picker">
   <form id="pickerForm">
-    <h2>Set time</h2>
+    <h2>Set the speaking clock</h2>
     <div id="presets"></div>
     <div class="row">
       <input id="pickerInput" type="text" inputmode="numeric" autocomplete="off" placeholder="m:ss" aria-label="Minutes and seconds">
@@ -292,26 +307,32 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   'use strict';
 
   // Timing. Edit these and redeploy.
-  const TOTAL_SECONDS = 10 * 60;
-  const YELLOW_AT_SECONDS = 5 * 60;
-  const RED_AT_SECONDS = 2 * 60 + 30;
-  // Time picker presets sit this many seconds before each threshold.
+  const SPEAK_SECONDS = 5 * 60;       // what the speaker is told
+  const GRACE_SECONDS = 2 * 60;       // "Wrap up" countdown after that; the cutoff ends it
+  const YELLOW_AT_SECONDS = 2 * 60;   // remaining on the speaking clock when it turns yellow
+  // Time picker presets sit this many seconds before each event.
   const PRESET_MARGIN_SECONDS = 2;
+
+  const SPEAK_MS = SPEAK_SECONDS * 1000;
+  const CUTOFF_MS = (SPEAK_SECONDS + GRACE_SECONDS) * 1000;
+  const MAX_SECONDS = 99 * 60 + 59;
 
   const HINTS = {
     idle: 'Tap to start',
     running: 'Tap to pause',
     paused: 'Paused. Tap to resume.',
-    done: "Time's up. Tap to reset.",
   };
+  const LABELS = { speaking: '', grace: 'Wrap up', questions: 'Questions' };
 
   const body = document.body;
   const clock = document.getElementById('clock');
   const slots = Array.from(clock.querySelectorAll('.slot'));
+  const label = document.getElementById('label');
   const hint = document.getElementById('hint');
   const fill = document.getElementById('fill');
   const flash = document.getElementById('flash');
   const resetBtn = document.getElementById('reset');
+  const questionsBtn = document.getElementById('questions');
   const picker = document.getElementById('picker');
   const pickerForm = document.getElementById('pickerForm');
   const pickerInput = document.getElementById('pickerInput');
@@ -319,23 +340,30 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   const presets = document.getElementById('presets');
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  let phase = 'idle';                       // idle | running | paused | done
-  let remainingMs = TOTAL_SECONDS * 1000;   // authoritative while not running
-  let endAt = 0;                            // deadline while running
+  let phase = 'idle';        // idle | running | paused
+  let elapsedMs = 0;         // authoritative while not running; negative after a picker value above SPEAK
+  let startAt = 0;           // now() minus elapsed, while running
+  let questionsAt = null;    // elapsed at which questions began, once they have
+  let barStartMs = 0;        // elapsed at which the progress bar is empty
   let rafId = 0;
   let shownDigits = [];
   let shownColor = null;
   let wakeLock = null;
-  let barTotalMs = TOTAL_SECONDS * 1000;  // grows when a time above TOTAL is picked
 
   const now = () => performance.now();
-  const remaining = () => (phase === 'running' ? Math.max(0, endAt - now()) : remainingMs);
+  const elapsed = () => (phase === 'running' ? now() - startAt : elapsedMs);
+  const questionsStart = () => (questionsAt === null ? CUTOFF_MS : questionsAt);
 
-  function colorFor(ms) {
-    const s = ms / 1000;
-    if (s <= RED_AT_SECONDS) return 'red';
-    if (s <= YELLOW_AT_SECONDS) return 'yellow';
-    return 'green';
+  function modeFor(e) {
+    if (e >= questionsStart()) return 'questions';
+    if (e >= SPEAK_MS) return 'grace';
+    return 'speaking';
+  }
+
+  function colorFor(e, mode) {
+    if (mode === 'questions') return 'blue';
+    if (mode === 'grace') return 'red';
+    return SPEAK_MS - e <= YELLOW_AT_SECONDS * 1000 ? 'yellow' : 'green';
   }
 
   // Display
@@ -354,10 +382,21 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     out.onfinish = () => old.remove();
   }
 
-  function render(ms, quiet = false) {
-    const total = Math.ceil(ms / 1000);
-    const m = Math.floor(total / 60);
-    const s = total % 60;
+  // What a color change does: a live crossing sounds and pulses, a jump only
+  // pulses, a reset does neither.
+  const LIVE = { sound: true, pulse: true };
+  const JUMP = { sound: false, pulse: true };
+  const QUIET = { sound: false, pulse: false };
+
+  function render(e, opts = LIVE) {
+    const mode = modeFor(e);
+    let secs;
+    if (mode === 'questions') secs = Math.floor((e - questionsStart()) / 1000);
+    else if (mode === 'grace') secs = Math.ceil((CUTOFF_MS - e) / 1000);
+    else secs = Math.ceil((SPEAK_MS - e) / 1000);
+    secs = Math.max(0, Math.min(MAX_SECONDS, secs));
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
     const digits = [Math.floor(m / 10), m % 10, Math.floor(s / 10), s % 10];
     const first = shownDigits.length === 0;
     digits.forEach((d, i) => {
@@ -368,14 +407,23 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     slots[0].classList.toggle('off', digits[0] === 0);
     shownDigits = digits;
 
-    fill.style.setProperty('--p', Math.max(0, Math.min(1, 1 - ms / barTotalMs)).toFixed(4));
+    body.dataset.mode = mode;
+    label.textContent = LABELS[mode];
 
-    const color = colorFor(ms);
+    const p = (e - barStartMs) / (CUTOFF_MS - barStartMs);
+    fill.style.setProperty('--p', Math.max(0, Math.min(1, p)).toFixed(4));
+
+    const color = colorFor(e, mode);
     if (color !== shownColor) {
-      const crossed = !quiet && shownColor !== null && phase === 'running';
+      const crossed = shownColor !== null;
       shownColor = color;
       body.dataset.color = color;
-      if (crossed) { pulse(); ding(); }
+      if (crossed && opts.pulse) pulse();
+      if (crossed && opts.sound) {
+        if (color === 'yellow') ding();
+        else if (color === 'red') chime();
+        else if (color === 'blue') longChime();
+      }
     }
   }
 
@@ -409,15 +457,15 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
 
   function tick() {
     if (phase !== 'running') return;
-    const ms = remaining();
-    render(ms);
-    if (ms <= 0) { finish(); return; }
+    const e = elapsed();
+    if (questionsAt === null && e >= CUTOFF_MS) questionsAt = CUTOFF_MS;
+    render(e);
     rafId = requestAnimationFrame(tick);
   }
 
   function start() {
     unlockAudio();
-    endAt = now() + remainingMs;
+    startAt = now() - elapsedMs;
     setPhase('running');
     body.classList.remove('fresh');
     bounce();
@@ -427,42 +475,54 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   }
 
   function pause() {
-    remainingMs = remaining();
+    elapsedMs = elapsed();
     cancelAnimationFrame(rafId);
     setPhase('paused');
     bounce();
     releaseWakeLock();
-    render(remainingMs);
-  }
-
-  function finish() {
-    cancelAnimationFrame(rafId);
-    remainingMs = 0;
-    setPhase('done');
-    render(0);
-    chime();
-    releaseWakeLock();
+    render(elapsedMs);
   }
 
   function reset() {
     cancelAnimationFrame(rafId);
-    remainingMs = TOTAL_SECONDS * 1000;
-    barTotalMs = TOTAL_SECONDS * 1000;
+    closePicker();
+    elapsedMs = 0;
+    questionsAt = null;
+    barStartMs = 0;
     setPhase('idle');
     body.classList.add('fresh');
     releaseWakeLock();
-    render(remainingMs);
+    render(0, QUIET);
   }
 
   function toggle() {
     if (phase === 'running') pause();
-    else if (phase === 'done') reset();
     else start();
   }
 
-  // Time picker (two-finger tap, N or Right arrow)
+  // Jump to the questions count-up from anywhere, without the cutoff chime.
+  function questions() {
+    closePicker();
+    const e = elapsed();
+    if (modeFor(e) === 'questions') return;
+    questionsAt = e;
+    body.classList.remove('fresh');
+    render(e, JUMP);
+    if (phase !== 'running') start();
+  }
 
-  const MAX_TIME_MS = (99 * 60 + 59) * 1000;
+  // Move the clock to a point in the run, without any sound.
+  function applyElapsed(e) {
+    questionsAt = null;
+    if (phase === 'running') startAt = now() - e;
+    else elapsedMs = e;
+    barStartMs = Math.min(0, e);
+    body.classList.remove('fresh');
+    closePicker();
+    render(elapsed(), JUMP);
+  }
+
+  // Time picker (two-finger tap, N or Right arrow)
 
   function formatTime(sec) {
     return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
@@ -478,6 +538,15 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     if (t.length <= 2) return Number(t) * 60 * 1000;
     return (Number(t.slice(0, -2)) * 60 + Number(t.slice(-2))) * 1000;
   }
+
+  const PRESETS = [
+    { text: formatTime(SPEAK_SECONDS), elapsed: 0 },
+    { text: formatTime(YELLOW_AT_SECONDS + PRESET_MARGIN_SECONDS),
+      elapsed: (SPEAK_SECONDS - YELLOW_AT_SECONDS - PRESET_MARGIN_SECONDS) * 1000 },
+    { text: formatTime(PRESET_MARGIN_SECONDS), elapsed: (SPEAK_SECONDS - PRESET_MARGIN_SECONDS) * 1000 },
+    { text: `Cutoff ${formatTime(PRESET_MARGIN_SECONDS)}`,
+      elapsed: (SPEAK_SECONDS + GRACE_SECONDS - PRESET_MARGIN_SECONDS) * 1000 },
+  ];
 
   function pickerOpen() {
     return picker.classList.contains('open');
@@ -495,26 +564,13 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     picker.classList.remove('open');
   }
 
-  function applyTime(ms) {
-    ms = Math.max(1000, Math.min(MAX_TIME_MS, ms));
-    if (phase === 'running') endAt = now() + ms;
-    else remainingMs = ms;
-    if (phase === 'done') setPhase('idle');
-    barTotalMs = Math.max(TOTAL_SECONDS * 1000, ms);
-    body.classList.remove('fresh');
-    closePicker();
-    render(remaining(), true);  // a jump, not a crossing: no ding
-  }
-
-  [TOTAL_SECONDS, YELLOW_AT_SECONDS + PRESET_MARGIN_SECONDS, RED_AT_SECONDS + PRESET_MARGIN_SECONDS, PRESET_MARGIN_SECONDS]
-    .filter((sec, i, all) => sec > 0 && all.indexOf(sec) === i)
-    .forEach((sec) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = formatTime(sec);
-      b.addEventListener('click', () => applyTime(sec * 1000));
-      presets.appendChild(b);
-    });
+  PRESETS.forEach(({ text, elapsed: e }) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = text;
+    b.addEventListener('click', () => applyElapsed(e));
+    presets.appendChild(b);
+  });
 
   pickerForm.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -523,23 +579,25 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
       pickerError.textContent = 'Use m:ss like 7:30, digits like 730, or minutes like 7.';
       return;
     }
-    applyTime(ms);
+    const remaining = Math.max(1000, Math.min(MAX_SECONDS * 1000, ms));
+    applyElapsed(SPEAK_MS - remaining);
   });
   document.getElementById('pickerCancel').addEventListener('click', closePicker);
   picker.addEventListener('click', (e) => { if (e.target === picker) closePicker(); });
 
-  // Sound. Two tones are rendered once into WAVs and played through one
-  // <audio> element: a soft ding at each color change and a longer chime at
-  // 0:00. iOS lets a media element that a tap started be replayed later
-  // without a gesture, and media playback ignores silent mode, which Web
-  // Audio output does not.
+  // Sound. Three tones are rendered once into WAVs and played through one
+  // <audio> element: a soft ding at yellow, a chime when the grace starts, and
+  // a longer chime at the cutoff. iOS lets a media element that a tap started
+  // be replayed later without a gesture, and media playback ignores silent
+  // mode, which Web Audio output does not.
 
   const CHIME_NOTES = [523.25, 659.25, 783.99, 1046.5];  // C5 E5 G5 C6
   const CHIME_LEAD_S = 0.25;  // silence before the first note, so the unlock play+pause stays inaudible
   const DING = { freq: 880, at: 0, dur: 0.9, gain: 0.3 };  // A5, half the chime's level
   let bell = null;
-  let chimeUrl = null;
   let dingUrl = null;
+  let chimeUrl = null;
+  let longChimeUrl = null;
   let bellReady = false;
 
   // notes: [{ freq, at, dur, gain }], seconds after the lead-in silence.
@@ -568,14 +626,17 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     return URL.createObjectURL(new Blob([view.buffer], { type: 'audio/wav' }));
   }
 
+  // The four-note run, starting `offset` seconds in, with the last note held `lastDur`.
+  function chimeRun(offset, lastDur) {
+    const last = CHIME_NOTES.length - 1;
+    return CHIME_NOTES.map((freq, i) => ({ freq, at: offset + i * 0.28, dur: i === last ? lastDur : 0.7, gain: 0.6 }));
+  }
+
   function getBell() {
     if (!bell) {
-      const last = CHIME_NOTES.length - 1;
-      chimeUrl = renderTone(
-        CHIME_NOTES.map((freq, i) => ({ freq, at: i * 0.28, dur: i === last ? 1.8 : 0.7, gain: 0.6 })),
-        CHIME_LEAD_S,
-      );
       dingUrl = renderTone([DING], 0.05);
+      chimeUrl = renderTone(chimeRun(0, 1.8), CHIME_LEAD_S);
+      longChimeUrl = renderTone([...chimeRun(0, 1.0), ...chimeRun(1.5, 1.8)], CHIME_LEAD_S);
       bell = new Audio(chimeUrl);
       bell.preload = 'auto';
       bell.setAttribute('playsinline', '');
@@ -606,8 +667,9 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     el.play().catch(() => {});
   }
 
-  function chime() { playTone(chimeUrl); }
   function ding() { playTone(dingUrl); }
+  function chime() { playTone(chimeUrl); }
+  function longChime() { playTone(longChimeUrl); }
 
   // Keep the screen on while running
 
@@ -632,15 +694,16 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible' || phase !== 'running') return;
     if (!wakeLock) requestWakeLock();
-    render(remaining());
+    tick();
   });
 
-  // Input: one finger toggles, two fingers skip.
+  // Input: one finger toggles, two fingers open the picker.
   // Touch goes through touch events: iOS Safari drops pointer events once a
   // second finger lands, so a two-finger tap never completed through them.
 
   const TAP_MAX_MS = 800;
   const TAP_MAX_MOVE_PX = 24;
+  const PASSTHROUGH = '#buttons, #picker';  // real buttons and the form get normal browser taps
 
   let touchFingers = 0;
   let touchStart = 0;
@@ -652,7 +715,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     if (touchFingers === 0) {
       touchStart = now();
       touchMoved = false;
-      touchIgnored = !!e.target.closest('#reset, #picker');
+      touchIgnored = !!e.target.closest(PASSTHROUGH);
       touchOrigins.clear();
     }
     if (touchIgnored) return;
@@ -696,7 +759,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   let gestureMoved = false;
 
   window.addEventListener('pointerdown', (e) => {
-    if (e.pointerType === 'touch' || e.target.closest('#reset, #picker')) return;
+    if (e.pointerType === 'touch' || e.target.closest(PASSTHROUGH)) return;
     if (pointers.size === 0) {
       gestureFingers = 0;
       gestureStart = now();
@@ -730,6 +793,12 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     reset();
   });
 
+  questionsBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    questionsBtn.blur();
+    questions();
+  });
+
   window.addEventListener('keydown', (e) => {
     if (e.repeat) return;
     if (pickerOpen()) {
@@ -740,6 +809,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     if (k === 'arrowright' || k === 'n') { e.preventDefault(); openPicker(true); }
     else if (k === ' ' || k === 'enter') { e.preventDefault(); toggle(); }
     else if (k === 'r') reset();
+    else if (k === 'q') questions();
   });
 
   // No pinch zoom, no long-press menu.
@@ -751,7 +821,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     try { navigator.audioSession.type = 'playback'; } catch (_) { /* older WebKit */ }
   }
   getBell();
-  render(remainingMs);
+  render(0, QUIET);
 })();
 </script>
 </body>
