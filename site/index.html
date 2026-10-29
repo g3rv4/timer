@@ -31,6 +31,10 @@
     Mute button                    silence this device only.
     Hide button or H               hide the buttons on this device; a two-finger
                                    tap brings them back (and opens the picker otherwise).
+    Control key                    open the page once as /?key=SECRET (the key stays in
+                                   the URL so Add to Home Screen carries it), or two-finger
+                                   tap a view-only screen and type it; K on a keyboard.
+                                   Without it the page is view only: no buttons, taps ignored.
   On a phone the controls are a button row at the bottom.
   The timing constants are at the top of the script.
 -->
@@ -171,6 +175,18 @@ body[data-phase="running"] #hint { opacity: 0; }
 #buttons button:active { transform: scale(0.95); }
 #buttons button[aria-pressed="true"] { background: color-mix(in srgb, currentColor 30%, transparent); }
 body.hide-buttons #buttons { opacity: 0; pointer-events: none; }
+body.view-only #buttons, body.view-only #hint { display: none; }
+body.view-only { cursor: default; }
+#viewonly {
+  position: absolute;
+  right: calc(2vw + env(safe-area-inset-right));
+  bottom: calc(3vh + env(safe-area-inset-bottom));
+  display: none;
+  font-size: max(1.6vw, 13px);
+  font-weight: 600;
+  opacity: 0.5;
+}
+body.view-only #viewonly { display: block; }
 .narrow { display: none; }
 body[data-phase="running"] #reset,
 body.fresh #reset,
@@ -212,7 +228,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
   pointer-events: none;
 }
 
-#picker {
+.overlay {
   position: absolute;
   inset: 0;
   display: none;
@@ -221,8 +237,8 @@ body[data-mode="questions"] #bar { opacity: 0; }
   background: rgba(17, 17, 17, 0.45);
   cursor: default;
 }
-#picker.open { display: flex; }
-#picker form {
+.overlay.open { display: flex; }
+.overlay form {
   width: min(72vw, 760px);
   padding: 3vw;
   border-radius: 1.6vw;
@@ -231,7 +247,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
   box-shadow: 0 2vh 6vh rgba(0, 0, 0, 0.3);
   font-size: max(2vw, 15px);
 }
-#picker h2 {
+.overlay h2 {
   font-size: max(2.4vw, 19px);
   font-weight: 800;
   margin-bottom: 1.6vw;
@@ -242,7 +258,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
   gap: max(1vw, 8px);
   margin-bottom: max(2vw, 14px);
 }
-#picker button {
+.overlay button {
   font: inherit;
   font-weight: 700;
   color: #111111;
@@ -253,18 +269,18 @@ body[data-mode="questions"] #bar { opacity: 0; }
   min-height: 44px;
   cursor: pointer;
 }
-#picker button:active { transform: scale(0.96); }
+.overlay button:active { transform: scale(0.96); }
 #presets button {
   font-size: max(2.6vw, 18px);
   font-variant-numeric: tabular-nums;
 }
-#picker .row {
+.overlay .row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: max(1vw, 8px);
 }
-#pickerInput {
+.overlay input {
   font: inherit;
   font-size: max(2.6vw, 20px);
   font-variant-numeric: tabular-nums;
@@ -278,8 +294,8 @@ body[data-mode="questions"] #bar { opacity: 0; }
   -webkit-user-select: text;
   user-select: text;
 }
-#pickerInput:focus { outline: 0.2em solid var(--green); }
-#pickerHelp {
+.overlay input:focus { outline: 0.2em solid var(--green); }
+.overlay .help {
   margin-top: max(1.2vw, 10px);
   font-size: max(1.7vw, 13px);
   opacity: 0.7;
@@ -329,7 +345,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
   body[data-mode="questions"] #questions { display: none; }
   body.hide-buttons #buttons { display: none; }
   #link { bottom: calc(14vh + env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; }
-  #picker form { width: 92vw; padding: 5vw; border-radius: 16px; }
+  .overlay form { width: 92vw; padding: 5vw; border-radius: 16px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -358,7 +374,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
 <div id="bar"><div id="fill"></div></div>
 <div id="flash"></div>
 <p id="rotate">Rotate to landscape</p>
-<div id="picker">
+<div id="picker" class="overlay">
   <form id="pickerForm">
     <h2>Set the speaking clock</h2>
     <div id="presets"></div>
@@ -367,10 +383,22 @@ body[data-mode="questions"] #bar { opacity: 0; }
       <button type="submit">Set</button>
       <button type="button" id="pickerCancel">Cancel</button>
     </div>
-    <p id="pickerHelp">7:30, 730 or 7 all work. Tap outside to close.</p>
+    <p id="pickerHelp" class="help">7:30, 730 or 7 all work. Tap outside to close.</p>
     <p id="pickerError"></p>
   </form>
 </div>
+<div id="keybox" class="overlay">
+  <form id="keyForm">
+    <h2>Control key</h2>
+    <div class="row">
+      <input id="keyInput" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="key" aria-label="Control key">
+      <button type="submit">Use key</button>
+      <button type="button" id="keyCancel">Cancel</button>
+    </div>
+    <p class="help">Without a key this screen is view only.</p>
+  </form>
+</div>
+<p id="viewonly">View only</p>
 <script>
 (() => {
   'use strict';
@@ -415,7 +443,28 @@ body[data-mode="questions"] #bar { opacity: 0; }
   const pickerInput = document.getElementById('pickerInput');
   const pickerError = document.getElementById('pickerError');
   const presets = document.getElementById('presets');
+  const keybox = document.getElementById('keybox');
+  const keyForm = document.getElementById('keyForm');
+  const keyInput = document.getElementById('keyInput');
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Control key. Without it the page is view only. It comes from ?key= in
+  // the URL (left there so Add to Home Screen carries it) or from the key
+  // prompt, and is remembered in this browser.
+  let controlKey = '';
+  try { controlKey = localStorage.getItem('timer.key') || ''; } catch (_) { /* private mode */ }
+  const urlKey = new URLSearchParams(location.search).get('key');
+  if (urlKey) { controlKey = urlKey; saveKey(urlKey); }
+  let canWrite = false;
+
+  function saveKey(k) {
+    try { localStorage.setItem('timer.key', k); } catch (_) { /* private mode */ }
+  }
+
+  function setCanWrite(v) {
+    canWrite = v;
+    body.classList.toggle('view-only', !v);
+  }
 
   // Shared state, mirrored from the server. Every device renders from the same
   // timestamps, so they agree to within the clock offset measured below.
@@ -545,6 +594,10 @@ body[data-mode="questions"] #bar { opacity: 0; }
   function applyState(msg) {
     state = msg.state;
     const cause = msg.cause;
+    if (cause === 'sync') {
+      setCanWrite(!!msg.canWrite);
+      if (controlKey && !msg.canWrite) { controlKey = ''; saveKey(''); }  // a wrong key is forgotten
+    }
     const opts = cause === 'set' || cause === 'questions' ? JUMP
       : cause === 'start' || cause === 'pause' ? LIVE
       : QUIET;
@@ -564,18 +617,21 @@ body[data-mode="questions"] #bar { opacity: 0; }
   // broadcast comes back. The bounce is immediate feedback for the tap.
 
   function toggle() {
+    if (!canWrite) return;
     unlockAudio();
     bounce();
     send({ type: state.phase === 'running' ? 'pause' : 'start' });
   }
 
   function reset() {
+    if (!canWrite) return;
     closePicker();
     send({ type: 'reset' });
   }
 
   // Jump to the questions count-up from anywhere, without the cutoff chime.
   function questions() {
+    if (!canWrite) return;
     closePicker();
     unlockAudio();
     if (modeFor(elapsed()) === 'questions') return;
@@ -584,6 +640,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
 
   // Move the clock to a point in the run, without any sound.
   function applyElapsed(e) {
+    if (!canWrite) return;
     closePicker();
     send({ type: 'set', elapsedMs: e });
   }
@@ -600,7 +657,8 @@ body[data-mode="questions"] #bar { opacity: 0; }
     clearTimeout(retryTimer);
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${scheme}://${location.host}/ws`);
+    const query = controlKey ? `?key=${encodeURIComponent(controlKey)}` : '';
+    const ws = new WebSocket(`${scheme}://${location.host}/ws${query}`);
     socket = ws;
     ws.onopen = () => {
       retryMs = 500;
@@ -625,6 +683,15 @@ body[data-mode="questions"] #bar { opacity: 0; }
       retryMs = Math.min(retryMs * 2, 10000);
     };
     ws.onerror = () => ws.close();
+  }
+
+  // Drop the current socket and open a new one, e.g. with a new key.
+  function reconnect() {
+    const old = socket;
+    socket = null;
+    if (old) { try { old.close(); } catch (_) { /* already closed */ } }
+    retryMs = 500;
+    connect();
   }
 
   function send(msg) {
@@ -723,6 +790,35 @@ body[data-mode="questions"] #bar { opacity: 0; }
   });
   document.getElementById('pickerCancel').addEventListener('click', closePicker);
   picker.addEventListener('click', (e) => { if (e.target === picker) closePicker(); });
+
+  // Key prompt (two-finger tap on a view-only screen, or K)
+
+  function openKeyBox(focusInput) {
+    keyInput.value = '';
+    keybox.classList.add('open');
+    if (focusInput) keyInput.focus();
+  }
+
+  function closeKeyBox() {
+    keyInput.blur();
+    keybox.classList.remove('open');
+  }
+
+  function overlayOpen() {
+    return pickerOpen() || keybox.classList.contains('open');
+  }
+
+  keyForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const k = keyInput.value.trim();
+    if (!k) return;
+    controlKey = k;
+    saveKey(k);
+    closeKeyBox();
+    reconnect();
+  });
+  document.getElementById('keyCancel').addEventListener('click', closeKeyBox);
+  keybox.addEventListener('click', (e) => { if (e.target === keybox) closeKeyBox(); });
 
   // Sound. Three tones are rendered once into WAVs and played through one
   // <audio> element: a soft ding at yellow and at red, a chime when the grace
@@ -850,7 +946,8 @@ body[data-mode="questions"] #bar { opacity: 0; }
   }
 
   function twoFingerTap() {
-    if (buttonsHidden) setButtonsHidden(false);
+    if (!canWrite) openKeyBox(false);
+    else if (buttonsHidden) setButtonsHidden(false);
     else openPicker(false);
   }
 
@@ -860,7 +957,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
 
   const TAP_MAX_MS = 800;
   const TAP_MAX_MOVE_PX = 24;
-  const PASSTHROUGH = '#buttons, #picker';  // real buttons and the form get normal browser taps
+  const PASSTHROUGH = '#buttons, #picker, #keybox';  // real buttons and the form get normal browser taps
 
   let touchFingers = 0;
   let touchStart = 0;
@@ -956,20 +1053,24 @@ body[data-mode="questions"] #bar { opacity: 0; }
   onButton(questionsBtn, questions);
   onButton(setTimeBtn, () => { unlockAudio(); openPicker(false); });
   onButton(hideBtn, () => setButtonsHidden(true));
-  onButton(muteBtn, () => {
+  function toggleMute() {
     muted = !muted;
     try { localStorage.setItem('timer.muted', muted ? '1' : '0'); } catch (_) { /* private mode */ }
     reflectMute();
     unlockAudio();
-  });
+  }
+  onButton(muteBtn, toggleMute);
 
   window.addEventListener('keydown', (e) => {
     if (e.repeat) return;
-    if (pickerOpen()) {
-      if (e.key === 'Escape') { e.preventDefault(); closePicker(); }
-      return;  // the form handles typing and Enter
+    if (overlayOpen()) {
+      if (e.key === 'Escape') { e.preventDefault(); closePicker(); closeKeyBox(); }
+      return;  // the forms handle typing and Enter
     }
     const k = e.key.toLowerCase();
+    if (k === 'k') { openKeyBox(true); return; }
+    if (k === 'm') { toggleMute(); return; }
+    if (!canWrite) return;
     if (k === 'arrowright' || k === 'n') { e.preventDefault(); openPicker(true); }
     else if (k === ' ' || k === 'enter') { e.preventDefault(); toggle(); }
     else if (k === 'r') reset();
@@ -988,6 +1089,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
   getBell();
   reflectMute();
   setButtonsHidden(buttonsHidden);
+  setCanWrite(false);
   reflectPhase();
   render(0, QUIET);
   connect();

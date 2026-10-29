@@ -1,6 +1,9 @@
 // Serves the page from the assets binding and keeps one shared timer state
 // in a Durable Object that every open page talks to over a WebSocket at /ws.
-// No auth: anyone who can load the page can control the timer.
+//
+// Control needs the key in the TIMER_KEY secret, offered as ?key= on the
+// socket URL. A socket without it (or with the wrong one) can only watch.
+// With no secret configured at all, every socket can control.
 
 export default {
   async fetch(request, env) {
@@ -32,10 +35,15 @@ export class TimerRoom {
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response('Expected a WebSocket', { status: 426 });
     }
+    const offered = new URL(request.url).searchParams.get('key') || '';
+    const required = this.env.TIMER_KEY || '';
+    const canWrite = required === '' || offered === required;
+
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
-    server.send(JSON.stringify({ type: 'state', state: this.state, now: Date.now(), cause: 'sync' }));
+    server.serializeAttachment({ canWrite });  // survives hibernation
+    server.send(JSON.stringify({ type: 'state', state: this.state, now: Date.now(), cause: 'sync', canWrite }));
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -45,6 +53,12 @@ export class TimerRoom {
     const now = Date.now();
     if (msg.type === 'ping') {
       ws.send(JSON.stringify({ type: 'pong', t: msg.t, now }));
+      return;
+    }
+
+    const attachment = ws.deserializeAttachment();
+    if (!attachment || !attachment.canWrite) {
+      ws.send(JSON.stringify({ type: 'denied' }));
       return;
     }
 

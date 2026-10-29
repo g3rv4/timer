@@ -1,13 +1,15 @@
 {
   "name": "Room Timer",
   "short_name": "Timer",
-  "start_url": "./",
-  "scope": "./",
   "display": "standalone",
   "orientation": "landscape",
   "background_color": "#2ecc71",
   "theme_color": "#2ecc71",
   "icons": [
-    { "src": "icon.png", "sizes": "512x512", "type": "image/png" }
+    {
+      "src": "icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
   ]
 }
