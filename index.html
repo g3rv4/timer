@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Room Timer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Timer">
+<meta name="theme-color" content="#2ecc71">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" href="icon.png">
+<!--
+  Controls
+    Tap anywhere, Space or Enter   start, pause, resume. At 0:00 it resets.
+    Reset button or R              back to 10:00.
+    Two-finger tap, N or Right     test skip: 2 s before the next threshold (5:02, 2:32, 0:02).
+  The timing constants are at the top of the script.
+-->
+<style>
+:root {
+  --green: #2ecc71;
+  --yellow: #f5c518;
+  --red: #e5473a;
+  --red-deep: #b3271c;
+  --ink: #111111;
+  --bg: var(--green);
+  --fade: 1.5s;
+  --slot-w: 0.62em;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  position: relative;
+  background-color: var(--bg);
+  color: var(--ink);
+  font-family: ui-rounded, -apple-system, BlinkMacSystemFont, system-ui, "Helvetica Neue", Arial, sans-serif;
+  overflow: hidden;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color var(--fade) ease;
+  cursor: pointer;
+}
+body[data-color="green"]  { --bg: var(--green); }
+body[data-color="yellow"] { --bg: var(--yellow); }
+body[data-color="red"]    { --bg: var(--red); }
+body[data-phase="done"] { animation: breathe 1.4s ease-in-out infinite; }
+@keyframes breathe {
+  0%, 100% { background-color: var(--red); }
+  50% { background-color: var(--red-deep); }
+}
+
+#stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#clock {
+  display: flex;
+  align-items: center;
+  font-size: min(32vw, 78vh);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  white-space: nowrap;
+  will-change: transform;
+}
+.slot {
+  position: relative;
+  display: inline-block;
+  width: var(--slot-w);
+  height: 1em;
+  overflow: hidden;
+  transition: width 0.4s ease, opacity 0.4s ease;
+}
+.slot.off { width: 0; opacity: 0; }
+.digit {
+  position: absolute;
+  inset: 0;
+  text-align: center;
+  line-height: 1;
+}
+.colon {
+  display: inline-block;
+  width: 0.34em;
+  text-align: center;
+  position: relative;
+  top: -0.08em;
+}
+body[data-phase="paused"] #clock { animation: dim 2.4s ease-in-out infinite; }
+@keyframes dim {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.85; }
+}
+body[data-phase="done"] #clock { animation: heartbeat 1.4s ease-in-out infinite; }
+@keyframes heartbeat {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+#hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(9vh + env(safe-area-inset-bottom));
+  text-align: center;
+  font-size: 2.4vw;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  opacity: 0.65;
+  transition: opacity 0.4s ease;
+}
+body[data-phase="running"] #hint { opacity: 0; }
+
+#reset {
+  position: absolute;
+  top: calc(3vh + env(safe-area-inset-top));
+  right: calc(3vw + env(safe-area-inset-right));
+  font: inherit;
+  font-size: 1.9vw;
+  font-weight: 700;
+  color: var(--ink);
+  background: rgba(17, 17, 17, 0.08);
+  border: 0.14em solid rgba(17, 17, 17, 0.5);
+  border-radius: 999px;
+  padding: 0.55em 1.3em;
+  cursor: pointer;
+  transition: opacity 0.4s ease, transform 0.15s ease;
+}
+#reset:active { transform: scale(0.95); }
+body[data-phase="running"] #reset,
+body.fresh #reset { opacity: 0; pointer-events: none; }
+
+#bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1.4vh;
+  background: rgba(17, 17, 17, 0.12);
+}
+#fill {
+  height: 100%;
+  width: 100%;
+  background: rgba(17, 17, 17, 0.55);
+  transform-origin: left center;
+  transform: scaleX(var(--p, 1));
+}
+
+#flash {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  opacity: 0;
+  pointer-events: none;
+}
+
+#rotate { display: none; }
+@media (orientation: portrait) {
+  #rotate {
+    display: block;
+    position: absolute;
+    top: calc(6vh + env(safe-area-inset-top));
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 3vw;
+    font-weight: 600;
+    opacity: 0.6;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body, .slot, #hint, #reset { transition: none; }
+  body[data-phase="done"],
+  body[data-phase="paused"] #clock,
+  body[data-phase="done"] #clock { animation: none; }
+  body[data-phase="paused"] #clock { opacity: 0.6; }
+}
+</style>
+</head>
+<body data-phase="idle" class="fresh">
+<main id="stage">
+  <div id="clock"><span class="slot"></span><span class="slot"></span><span class="colon">:</span><span class="slot"></span><span class="slot"></span></div>
+</main>
+<p id="hint">Tap to start</p>
+<button id="reset" type="button">Reset</button>
+<div id="bar"><div id="fill"></div></div>
+<div id="flash"></div>
+<p id="rotate">Rotate to landscape</p>
+<script>
+(() => {
+  'use strict';
+
+  // Timing. Edit these and redeploy.
+  const TOTAL_SECONDS = 10 * 60;
+  const YELLOW_AT_SECONDS = 5 * 60;
+  const RED_AT_SECONDS = 2 * 60 + 30;
+  // The test skip lands this many seconds before the next threshold.
+  const SKIP_MARGIN_SECONDS = 2;
+
+  const HINTS = {
+    idle: 'Tap to start',
+    running: 'Tap to pause',
+    paused: 'Paused. Tap to resume.',
+    done: "Time's up. Tap to reset.",
+  };
+
+  const body = document.body;
+  const clock = document.getElementById('clock');
+  const slots = Array.from(clock.querySelectorAll('.slot'));
+  const hint = document.getElementById('hint');
+  const fill = document.getElementById('fill');
+  const flash = document.getElementById('flash');
+  const resetBtn = document.getElementById('reset');
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  let phase = 'idle';                       // idle | running | paused | done
+  let remainingMs = TOTAL_SECONDS * 1000;   // authoritative while not running
+  let endAt = 0;                            // deadline while running
+  let rafId = 0;
+  let shownDigits = [];
+  let shownColor = null;
+  let wakeLock = null;
+  let audioCtx = null;
+
+  const now = () => performance.now();
+  const remaining = () => (phase === 'running' ? Math.max(0, endAt - now()) : remainingMs);
+
+  function colorFor(ms) {
+    const s = ms / 1000;
+    if (s <= RED_AT_SECONDS) return 'red';
+    if (s <= YELLOW_AT_SECONDS) return 'yellow';
+    return 'green';
+  }
+
+  // Display
+
+  function setDigit(slot, d, animate) {
+    const old = slot.lastElementChild;
+    const next = document.createElement('span');
+    next.className = 'digit';
+    next.textContent = d;
+    slot.appendChild(next);
+    if (!old) return;
+    if (!animate || reduceMotion) { old.remove(); return; }
+    const opts = { duration: 320, easing: 'cubic-bezier(.2,.7,.2,1)', fill: 'forwards' };
+    next.animate([{ transform: 'translateY(-100%)', opacity: 0 }, { transform: 'translateY(0)', opacity: 1 }], opts);
+    const out = old.animate([{ transform: 'translateY(0)', opacity: 1 }, { transform: 'translateY(100%)', opacity: 0 }], opts);
+    out.onfinish = () => old.remove();
+  }
+
+  function render(ms) {
+    const total = Math.ceil(ms / 1000);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    const digits = [Math.floor(m / 10), m % 10, Math.floor(s / 10), s % 10];
+    const first = shownDigits.length === 0;
+    digits.forEach((d, i) => {
+      if (shownDigits[i] === d) return;
+      if (i === 0 && d === 0) return;  // the leading slot collapses instead of rolling to 0
+      setDigit(slots[i], d, !first);
+    });
+    slots[0].classList.toggle('off', digits[0] === 0);
+    shownDigits = digits;
+
+    fill.style.setProperty('--p', (ms / (TOTAL_SECONDS * 1000)).toFixed(4));
+
+    const color = colorFor(ms);
+    if (color !== shownColor) {
+      const crossed = shownColor !== null && phase === 'running';
+      shownColor = color;
+      body.dataset.color = color;
+      if (crossed) pulse();
+    }
+  }
+
+  function pulse() {
+    if (reduceMotion) return;
+    flash.animate(
+      [{ opacity: 0 }, { opacity: 0.35, offset: 0.15 }, { opacity: 0 }],
+      { duration: 800, easing: 'ease-out' },
+    );
+    clock.animate(
+      [{ transform: 'scale(1)' }, { transform: 'scale(1.06)', offset: 0.3 }, { transform: 'scale(1)' }],
+      { duration: 700, easing: 'cubic-bezier(.2,.8,.2,1)' },
+    );
+  }
+
+  function bounce() {
+    if (reduceMotion) return;
+    clock.animate(
+      [{ transform: 'scale(0.96)' }, { transform: 'scale(1)' }],
+      { duration: 320, easing: 'cubic-bezier(.2,.8,.2,1.2)' },
+    );
+  }
+
+  function setPhase(next) {
+    phase = next;
+    body.dataset.phase = next;
+    hint.textContent = HINTS[next];
+  }
+
+  // State machine
+
+  function tick() {
+    if (phase !== 'running') return;
+    const ms = remaining();
+    render(ms);
+    if (ms <= 0) { finish(); return; }
+    rafId = requestAnimationFrame(tick);
+  }
+
+  function start() {
+    unlockAudio();
+    endAt = now() + remainingMs;
+    setPhase('running');
+    body.classList.remove('fresh');
+    bounce();
+    requestWakeLock();
+    cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(tick);
+  }
+
+  function pause() {
+    remainingMs = remaining();
+    cancelAnimationFrame(rafId);
+    setPhase('paused');
+    bounce();
+    releaseWakeLock();
+    render(remainingMs);
+  }
+
+  function finish() {
+    cancelAnimationFrame(rafId);
+    remainingMs = 0;
+    setPhase('done');
+    render(0);
+    chime();
+    releaseWakeLock();
+  }
+
+  function reset() {
+    cancelAnimationFrame(rafId);
+    remainingMs = TOTAL_SECONDS * 1000;
+    setPhase('idle');
+    body.classList.add('fresh');
+    releaseWakeLock();
+    render(remainingMs);
+  }
+
+  function toggle() {
+    if (phase === 'running') pause();
+    else if (phase === 'done') reset();
+    else start();
+  }
+
+  function skip() {
+    if (phase === 'done') return;
+    const ms = remaining();
+    const target = [YELLOW_AT_SECONDS, RED_AT_SECONDS, 0]
+      .map((t) => (t + SKIP_MARGIN_SECONDS) * 1000)
+      .find((t) => t < ms);
+    if (target === undefined) return;
+    if (phase === 'running') endAt = now() + target;
+    else remainingMs = target;
+    body.classList.remove('fresh');
+    render(remaining());
+  }
+
+  // Sound
+
+  function unlockAudio() {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    if (!audioCtx) audioCtx = new Ctx();
+    if (audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
+  }
+
+  function chime() {
+    unlockAudio();
+    if (!audioCtx) return;
+    const t0 = audioCtx.currentTime + 0.05;
+    const notes = [523.25, 659.25, 783.99, 1046.5];  // C5 E5 G5 C6
+    notes.forEach((freq, i) => {
+      const t = t0 + i * 0.28;
+      const dur = i === notes.length - 1 ? 1.8 : 0.7;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.6, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(t);
+      osc.stop(t + dur + 0.05);
+    });
+  }
+
+  // Keep the screen on while running
+
+  async function requestWakeLock() {
+    if (!('wakeLock' in navigator)) return;
+    try {
+      const lock = await navigator.wakeLock.request('screen');
+      if (phase !== 'running') { lock.release().catch(() => {}); return; }
+      wakeLock = lock;
+      lock.addEventListener('release', () => { if (wakeLock === lock) wakeLock = null; });
+    } catch (_) {
+      wakeLock = null;
+    }
+  }
+
+  function releaseWakeLock() {
+    if (!wakeLock) return;
+    wakeLock.release().catch(() => {});
+    wakeLock = null;
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible' || phase !== 'running') return;
+    if (!wakeLock) requestWakeLock();
+    render(remaining());
+  });
+
+  // Input: one finger toggles, two fingers skip
+
+  const pointers = new Map();
+  let gestureFingers = 0;
+  let gestureStart = 0;
+  let gestureMoved = false;
+
+  window.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('#reset')) return;
+    if (pointers.size === 0) {
+      gestureFingers = 0;
+      gestureStart = now();
+      gestureMoved = false;
+    }
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    gestureFingers = Math.max(gestureFingers, pointers.size);
+  });
+
+  window.addEventListener('pointermove', (e) => {
+    const p = pointers.get(e.pointerId);
+    if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > 24) gestureMoved = true;
+  });
+
+  function endGesture(e, cancelled) {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.delete(e.pointerId);
+    if (cancelled) gestureMoved = true;
+    if (pointers.size > 0) return;
+    if (gestureMoved || now() - gestureStart > 600) return;
+    if (gestureFingers >= 2) skip();
+    else toggle();
+  }
+
+  window.addEventListener('pointerup', (e) => endGesture(e, false));
+  window.addEventListener('pointercancel', (e) => endGesture(e, true));
+
+  resetBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    resetBtn.blur();
+    reset();
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.repeat) return;
+    const k = e.key.toLowerCase();
+    if (k === 'arrowright' || k === 'n') { e.preventDefault(); skip(); }
+    else if (k === ' ' || k === 'enter') { e.preventDefault(); toggle(); }
+    else if (k === 'r') reset();
+  });
+
+  // No pinch zoom, no long-press menu.
+  document.addEventListener('gesturestart', (e) => e.preventDefault());
+  document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  render(remainingMs);
+})();
+</script>
+</body>
+</html>
