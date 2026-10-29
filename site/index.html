@@ -14,8 +14,8 @@
 <link rel="icon" href="icon.png">
 <!--
   A speaker gets SPEAK_SECONDS (5:00, green, yellow at 2:00 left, red at 1:00
-  left), then a grace countdown of GRACE_SECONDS (2:00, "Wrap up", red and black
-  swapping every second), then the cutoff flows into
+  left), then a grace countdown of GRACE_SECONDS (2:00, "Wrap up", a slow
+  breathing red), then the cutoff flows into
   a "Questions" count-up with no end.
 
   Controls
@@ -31,6 +31,7 @@
   --green: #2ecc71;
   --yellow: #f5c518;
   --red: #e5473a;
+  --red-deep: #b3271c;
   --blue: #1e3a8a;
   --ink: #111111;
   --bg: var(--green);
@@ -57,11 +58,16 @@ body[data-color="green"]  { --bg: var(--green); }
 body[data-color="yellow"] { --bg: var(--yellow); }
 body[data-color="red"]    { --bg: var(--red); }
 body[data-color="wrap"]   { --bg: var(--red); }
-/* Wrap up: red on black and black on red swap every second while running. */
-body[data-color="wrap"][data-phase="running"] { animation: wrapFlash 2s steps(1, end) infinite; }
-@keyframes wrapFlash {
-  0%, 100% { background-color: var(--red); color: var(--ink); }
-  50% { background-color: #000; color: var(--red); }
+/* Wrap up: the red breathes and the digits beat gently while running. */
+body[data-color="wrap"][data-phase="running"] { animation: breathe 2.5s ease-in-out infinite; }
+body[data-color="wrap"][data-phase="running"] #clock { animation: heartbeat 2.5s ease-in-out infinite; }
+@keyframes breathe {
+  0%, 100% { background-color: var(--red); }
+  50% { background-color: var(--red-deep); }
+}
+@keyframes heartbeat {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.03); }
 }
 body[data-color="blue"]   { --bg: var(--blue); --ink: #f8fafc; }
 
@@ -281,7 +287,8 @@ body[data-mode="questions"] #bar { opacity: 0; }
 @media (prefers-reduced-motion: reduce) {
   body, .slot, #hint, #buttons button, #bar { transition: none; }
   body[data-phase="paused"] #clock { animation: none; opacity: 0.6; }
-  body[data-color="wrap"][data-phase="running"] { animation: none; }
+  body[data-color="wrap"][data-phase="running"],
+  body[data-color="wrap"][data-phase="running"] #clock { animation: none; }
 }
 </style>
 </head>
