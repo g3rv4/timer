@@ -16,7 +16,7 @@
   Controls
     Tap anywhere, Space or Enter   start, pause, resume. At 0:00 it resets.
     Reset button or R              back to 10:00.
-    Two-finger tap, N or Right     test skip: 2 s before the next threshold (5:02, 2:32, 0:02).
+    Two-finger tap, N or Right     set the time: presets 10:00, 5:02, 2:32, 0:02, or type m:ss.
   The timing constants are at the top of the script.
 -->
 <style>
@@ -163,6 +163,84 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   pointer-events: none;
 }
 
+#picker {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(17, 17, 17, 0.45);
+  cursor: default;
+}
+#picker.open { display: flex; }
+#picker form {
+  width: min(72vw, 760px);
+  padding: 3vw;
+  border-radius: 1.6vw;
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 2vh 6vh rgba(0, 0, 0, 0.3);
+  font-size: 2vw;
+}
+#picker h2 {
+  font-size: 2.4vw;
+  font-weight: 800;
+  margin-bottom: 1.6vw;
+}
+#presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1vw;
+  margin-bottom: 2vw;
+}
+#picker button {
+  font: inherit;
+  font-weight: 700;
+  color: var(--ink);
+  background: rgba(17, 17, 17, 0.06);
+  border: 0.12em solid rgba(17, 17, 17, 0.5);
+  border-radius: 999px;
+  padding: 0.55em 1.2em;
+  min-height: 44px;
+  cursor: pointer;
+}
+#picker button:active { transform: scale(0.96); }
+#presets button {
+  font-size: 2.6vw;
+  font-variant-numeric: tabular-nums;
+}
+#picker .row {
+  display: flex;
+  align-items: center;
+  gap: 1vw;
+}
+#pickerInput {
+  font: inherit;
+  font-size: 2.6vw;
+  font-variant-numeric: tabular-nums;
+  width: 7ch;
+  padding: 0.35em 0.5em;
+  text-align: center;
+  color: var(--ink);
+  background: #fff;
+  border: 0.12em solid rgba(17, 17, 17, 0.5);
+  border-radius: 0.5em;
+  -webkit-user-select: text;
+  user-select: text;
+}
+#pickerInput:focus { outline: 0.2em solid var(--green); }
+#pickerHelp {
+  margin-top: 1.2vw;
+  font-size: 1.7vw;
+  opacity: 0.7;
+}
+#pickerError {
+  margin-top: 0.6vw;
+  font-size: 1.7vw;
+  color: var(--red);
+  min-height: 1.2em;
+}
+
 #rotate { display: none; }
 @media (orientation: portrait) {
   #rotate {
@@ -196,6 +274,19 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
 <div id="bar"><div id="fill"></div></div>
 <div id="flash"></div>
 <p id="rotate">Rotate to landscape</p>
+<div id="picker">
+  <form id="pickerForm">
+    <h2>Set time</h2>
+    <div id="presets"></div>
+    <div class="row">
+      <input id="pickerInput" type="text" inputmode="numeric" autocomplete="off" placeholder="m:ss" aria-label="Minutes and seconds">
+      <button type="submit">Set</button>
+      <button type="button" id="pickerCancel">Cancel</button>
+    </div>
+    <p id="pickerHelp">7:30, 730 or 7 all work. Tap outside to close.</p>
+    <p id="pickerError"></p>
+  </form>
+</div>
 <script>
 (() => {
   'use strict';
@@ -204,8 +295,8 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   const TOTAL_SECONDS = 10 * 60;
   const YELLOW_AT_SECONDS = 5 * 60;
   const RED_AT_SECONDS = 2 * 60 + 30;
-  // The test skip lands this many seconds before the next threshold.
-  const SKIP_MARGIN_SECONDS = 2;
+  // Time picker presets sit this many seconds before each threshold.
+  const PRESET_MARGIN_SECONDS = 2;
 
   const HINTS = {
     idle: 'Tap to start',
@@ -221,6 +312,11 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   const fill = document.getElementById('fill');
   const flash = document.getElementById('flash');
   const resetBtn = document.getElementById('reset');
+  const picker = document.getElementById('picker');
+  const pickerForm = document.getElementById('pickerForm');
+  const pickerInput = document.getElementById('pickerInput');
+  const pickerError = document.getElementById('pickerError');
+  const presets = document.getElementById('presets');
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   let phase = 'idle';                       // idle | running | paused | done
@@ -230,6 +326,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   let shownDigits = [];
   let shownColor = null;
   let wakeLock = null;
+  let barTotalMs = TOTAL_SECONDS * 1000;  // grows when a time above TOTAL is picked
 
   const now = () => performance.now();
   const remaining = () => (phase === 'running' ? Math.max(0, endAt - now()) : remainingMs);
@@ -257,7 +354,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     out.onfinish = () => old.remove();
   }
 
-  function render(ms) {
+  function render(ms, quiet = false) {
     const total = Math.ceil(ms / 1000);
     const m = Math.floor(total / 60);
     const s = total % 60;
@@ -271,14 +368,14 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     slots[0].classList.toggle('off', digits[0] === 0);
     shownDigits = digits;
 
-    fill.style.setProperty('--p', (1 - ms / (TOTAL_SECONDS * 1000)).toFixed(4));
+    fill.style.setProperty('--p', Math.max(0, Math.min(1, 1 - ms / barTotalMs)).toFixed(4));
 
     const color = colorFor(ms);
     if (color !== shownColor) {
-      const crossed = shownColor !== null && phase === 'running';
+      const crossed = !quiet && shownColor !== null && phase === 'running';
       shownColor = color;
       body.dataset.color = color;
-      if (crossed) pulse();
+      if (crossed) { pulse(); ding(); }
     }
   }
 
@@ -350,6 +447,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   function reset() {
     cancelAnimationFrame(rafId);
     remainingMs = TOTAL_SECONDS * 1000;
+    barTotalMs = TOTAL_SECONDS * 1000;
     setPhase('idle');
     body.classList.add('fresh');
     releaseWakeLock();
@@ -362,46 +460,102 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     else start();
   }
 
-  function skip() {
-    if (phase === 'done') return;
-    const ms = remaining();
-    const target = [YELLOW_AT_SECONDS, RED_AT_SECONDS, 0]
-      .map((t) => (t + SKIP_MARGIN_SECONDS) * 1000)
-      .find((t) => t < ms);
-    if (target === undefined) return;
-    if (phase === 'running') endAt = now() + target;
-    else remainingMs = target;
-    body.classList.remove('fresh');
-    render(remaining());
+  // Time picker (two-finger tap, N or Right arrow)
+
+  const MAX_TIME_MS = (99 * 60 + 59) * 1000;
+
+  function formatTime(sec) {
+    return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
   }
 
-  // Sound. The chime is rendered once into a WAV and played through an
-  // <audio> element. iOS lets a media element that a tap started be replayed
-  // later without a gesture, and media playback ignores silent mode, which
-  // Web Audio output does not.
+  // "7:30" or "7.30" -> 7:30; "730" / "1000" -> 7:30 / 10:00; "7" -> 7:00.
+  function parseTime(text) {
+    const t = text.trim();
+    let m = /^(\d{1,3})[:.](\d{1,2})$/.exec(t);
+    if (m) return (Number(m[1]) * 60 + Number(m[2])) * 1000;
+    m = /^(\d{1,4})$/.exec(t);
+    if (!m) return null;
+    if (t.length <= 2) return Number(t) * 60 * 1000;
+    return (Number(t.slice(0, -2)) * 60 + Number(t.slice(-2))) * 1000;
+  }
+
+  function pickerOpen() {
+    return picker.classList.contains('open');
+  }
+
+  function openPicker(focusInput) {
+    pickerError.textContent = '';
+    pickerInput.value = '';
+    picker.classList.add('open');
+    if (focusInput) pickerInput.focus();
+  }
+
+  function closePicker() {
+    pickerInput.blur();
+    picker.classList.remove('open');
+  }
+
+  function applyTime(ms) {
+    ms = Math.max(1000, Math.min(MAX_TIME_MS, ms));
+    if (phase === 'running') endAt = now() + ms;
+    else remainingMs = ms;
+    if (phase === 'done') setPhase('idle');
+    barTotalMs = Math.max(TOTAL_SECONDS * 1000, ms);
+    body.classList.remove('fresh');
+    closePicker();
+    render(remaining(), true);  // a jump, not a crossing: no ding
+  }
+
+  [TOTAL_SECONDS, YELLOW_AT_SECONDS + PRESET_MARGIN_SECONDS, RED_AT_SECONDS + PRESET_MARGIN_SECONDS, PRESET_MARGIN_SECONDS]
+    .filter((sec, i, all) => sec > 0 && all.indexOf(sec) === i)
+    .forEach((sec) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = formatTime(sec);
+      b.addEventListener('click', () => applyTime(sec * 1000));
+      presets.appendChild(b);
+    });
+
+  pickerForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const ms = parseTime(pickerInput.value);
+    if (ms === null || ms <= 0) {
+      pickerError.textContent = 'Use m:ss like 7:30, digits like 730, or minutes like 7.';
+      return;
+    }
+    applyTime(ms);
+  });
+  document.getElementById('pickerCancel').addEventListener('click', closePicker);
+  picker.addEventListener('click', (e) => { if (e.target === picker) closePicker(); });
+
+  // Sound. Two tones are rendered once into WAVs and played through one
+  // <audio> element: a soft ding at each color change and a longer chime at
+  // 0:00. iOS lets a media element that a tap started be replayed later
+  // without a gesture, and media playback ignores silent mode, which Web
+  // Audio output does not.
 
   const CHIME_NOTES = [523.25, 659.25, 783.99, 1046.5];  // C5 E5 G5 C6
   const CHIME_LEAD_S = 0.25;  // silence before the first note, so the unlock play+pause stays inaudible
+  const DING = { freq: 880, at: 0, dur: 0.9, gain: 0.3 };  // A5, half the chime's level
   let bell = null;
-  let bellUrl = null;
+  let chimeUrl = null;
+  let dingUrl = null;
   let bellReady = false;
 
-  function renderChime() {
+  // notes: [{ freq, at, dur, gain }], seconds after the lead-in silence.
+  function renderTone(notes, leadS) {
     const rate = 22050;
-    const gap = 0.28;
-    const last = CHIME_NOTES.length - 1;
-    const n = Math.ceil((CHIME_LEAD_S + last * gap + 1.8 + 0.2) * rate);
+    const end = Math.max(...notes.map((x) => x.at + x.dur)) + 0.2;
+    const n = Math.ceil((leadS + end) * rate);
     const samples = new Float32Array(n);
-    CHIME_NOTES.forEach((freq, i) => {
-      const t0 = CHIME_LEAD_S + i * gap;
-      const dur = i === last ? 1.8 : 0.7;
-      const s0 = Math.floor(t0 * rate);
-      const s1 = Math.min(n, Math.floor((t0 + dur) * rate));
+    notes.forEach(({ freq, at, dur, gain }) => {
+      const s0 = Math.floor((leadS + at) * rate);
+      const s1 = Math.min(n, Math.floor((leadS + at + dur) * rate));
       for (let s = s0; s < s1; s++) {
         const t = (s - s0) / rate;
         const attack = Math.min(1, t / 0.02);
         const decay = Math.pow(0.0002, t / dur);
-        samples[s] += 0.6 * attack * decay * Math.sin(2 * Math.PI * freq * t);
+        samples[s] += gain * attack * decay * Math.sin(2 * Math.PI * freq * t);
       }
     });
     const view = new DataView(new ArrayBuffer(44 + n * 2));
@@ -416,8 +570,13 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
 
   function getBell() {
     if (!bell) {
-      bellUrl = renderChime();
-      bell = new Audio(bellUrl);
+      const last = CHIME_NOTES.length - 1;
+      chimeUrl = renderTone(
+        CHIME_NOTES.map((freq, i) => ({ freq, at: i * 0.28, dur: i === last ? 1.8 : 0.7, gain: 0.6 })),
+        CHIME_LEAD_S,
+      );
+      dingUrl = renderTone([DING], 0.05);
+      bell = new Audio(chimeUrl);
       bell.preload = 'auto';
       bell.setAttribute('playsinline', '');
       bell.load();
@@ -439,13 +598,16 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     }).catch(() => {});
   }
 
-  function chime() {
+  function playTone(url) {
     const el = getBell();
     // Re-setting src before play() is the workaround for WebKit bug 295518:
     // home-screen apps on iOS 26.0/26.1 otherwise go silent after a relaunch.
-    el.src = bellUrl;
+    el.src = url;
     el.play().catch(() => {});
   }
+
+  function chime() { playTone(chimeUrl); }
+  function ding() { playTone(dingUrl); }
 
   // Keep the screen on while running
 
@@ -490,7 +652,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     if (touchFingers === 0) {
       touchStart = now();
       touchMoved = false;
-      touchIgnored = !!e.target.closest('#reset');
+      touchIgnored = !!e.target.closest('#reset, #picker');
       touchOrigins.clear();
     }
     if (touchIgnored) return;
@@ -519,7 +681,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     const fingers = touchFingers;
     touchFingers = 0;
     if (touchMoved || now() - touchStart > TAP_MAX_MS) return;
-    if (fingers >= 2) skip();
+    if (fingers >= 2) openPicker(false);
     else toggle();
   }
 
@@ -534,7 +696,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
   let gestureMoved = false;
 
   window.addEventListener('pointerdown', (e) => {
-    if (e.pointerType === 'touch' || e.target.closest('#reset')) return;
+    if (e.pointerType === 'touch' || e.target.closest('#reset, #picker')) return;
     if (pointers.size === 0) {
       gestureFingers = 0;
       gestureStart = now();
@@ -555,7 +717,7 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
     if (cancelled) gestureMoved = true;
     if (pointers.size > 0) return;
     if (gestureMoved || now() - gestureStart > TAP_MAX_MS) return;
-    if (gestureFingers >= 2) skip();
+    if (gestureFingers >= 2) openPicker(false);
     else toggle();
   }
 
@@ -570,8 +732,12 @@ body.fresh #reset { opacity: 0; pointer-events: none; }
 
   window.addEventListener('keydown', (e) => {
     if (e.repeat) return;
+    if (pickerOpen()) {
+      if (e.key === 'Escape') { e.preventDefault(); closePicker(); }
+      return;  // the form handles typing and Enter
+    }
     const k = e.key.toLowerCase();
-    if (k === 'arrowright' || k === 'n') { e.preventDefault(); skip(); }
+    if (k === 'arrowright' || k === 'n') { e.preventDefault(); openPicker(true); }
     else if (k === ' ' || k === 'enter') { e.preventDefault(); toggle(); }
     else if (k === 'r') reset();
   });
