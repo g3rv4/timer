@@ -84,6 +84,26 @@ body[data-color="wrap"][data-phase="running"] #clock { animation: heartbeat 2.5s
 }
 body[data-color="blue"]   { --bg: var(--blue); --ink: #f8fafc; }
 
+/* Until the first state arrives: a neutral screen, nothing to flash or roll. */
+body.loading { --bg: #1f2937; --ink: #f8fafc; cursor: default; }
+body.loading #stage, body.loading #hint, body.loading #buttons, body.loading #bar,
+body.loading #link, body.loading #viewonly { visibility: hidden; }
+#loading {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  font-size: max(4vw, 20px);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+body.loading #loading { display: flex; animation: loadingPulse 1.6s ease-in-out infinite; }
+@keyframes loadingPulse {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 0.35; }
+}
+
 #stage {
   position: absolute;
   inset: 0;
@@ -101,7 +121,8 @@ body[data-color="blue"]   { --bg: var(--blue); --ink: #f8fafc; }
   opacity: 0.75;
   transition: color var(--fade) ease;
 }
-body[data-mode="grace"] #label {
+body[data-mode="grace"] #label,
+body[data-mode="questions"] #label {
   font-size: max(5vw, 22px);
   font-weight: 800;
   color: #fff;
@@ -361,15 +382,17 @@ body[data-mode="questions"] #bar { opacity: 0; }
   body, .slot, #hint, #buttons button, #bar { transition: none; }
   body[data-phase="paused"] #clock { animation: none; opacity: 0.6; }
   body[data-color="wrap"][data-phase="running"],
-  body[data-color="wrap"][data-phase="running"] #clock { animation: none; }
+  body[data-color="wrap"][data-phase="running"] #clock,
+  body.loading #loading { animation: none; }
 }
 </style>
 </head>
-<body data-phase="idle" data-mode="speaking" data-color="green" class="fresh">
+<body data-phase="idle" data-mode="speaking" data-color="green" class="fresh loading">
 <main id="stage">
   <p id="label"></p>
   <div id="clock"><span class="slot"></span><span class="slot"></span><span class="colon">:</span><span class="slot"></span><span class="slot"></span></div>
 </main>
+<p id="loading">Connecting</p>
 <p id="hint">Tap to start</p>
 <div id="buttons">
   <button id="toggle" type="button" class="narrow">Start</button>
@@ -604,6 +627,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
     state = msg.state;
     const cause = msg.cause;
     if (cause === 'sync') {
+      body.classList.remove('loading');
       setCanWrite(!!msg.canWrite);
       if (controlKey && !msg.canWrite) { controlKey = ''; saveKey(''); }  // a wrong key is forgotten
     }
@@ -1100,7 +1124,6 @@ body[data-mode="questions"] #bar { opacity: 0; }
   setButtonsHidden(buttonsHidden);
   setCanWrite(false);
   reflectPhase();
-  render(0, QUIET);
   connect();
 })();
 </script>
