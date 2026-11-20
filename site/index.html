@@ -36,6 +36,16 @@
                                    tap a view-only screen (buttons showing) and type it; K on
                                    a keyboard. Without it the page is view only: just Mute
                                    and Hide, taps ignored.
+  Agenda
+    Agenda button or A             type the meeting: an end time and one section per line,
+                                   a name then minutes ("Sales 10", "Demo 7:30"). Load swaps
+                                   every screen from the speaker clock to the agenda; Clear
+                                   swaps back. The text is kept for next time.
+    Tap, Space or Enter            start, then next section. A section that runs out counts
+                                   up as overtime until then.
+    Back button, B or Left         undo the last one.
+    Sections get their planned time, or less when the end is near: each one's share
+    of what is left (src/worker.js). Edit while running to change what is still to come.
   On a phone the controls are a button row at the bottom.
   The timing constants are at the top of the script.
 -->
@@ -354,13 +364,30 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
   -webkit-user-select: text;
   user-select: text;
 }
-.overlay input:focus { outline: 0.2em solid var(--green); }
+.overlay input:focus, .overlay textarea:focus { outline: 0.2em solid var(--green); }
+#agendaEnd { width: auto; }
+.overlay textarea {
+  display: block;
+  width: 100%;
+  height: min(28vh, 10em);
+  margin: max(1.2vw, 10px) 0;
+  padding: 0.4em 0.6em;
+  font: inherit;
+  font-size: max(2vw, 16px);
+  color: #111111;
+  background: #fff;
+  border: 0.12em solid rgba(17, 17, 17, 0.5);
+  border-radius: 0.5em;
+  resize: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
 .overlay .help {
   margin-top: max(1.2vw, 10px);
   font-size: max(1.7vw, 13px);
   opacity: 0.7;
 }
-#pickerError {
+#pickerError, #agendaError {
   margin-top: 0.6vw;
   font-size: max(1.7vw, 13px);
   color: var(--red);
@@ -406,6 +433,7 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
   body.hide-buttons #buttons { display: none; }
   #link { bottom: calc(14vh + env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; }
   .overlay form { width: 92vw; padding: 5vw; border-radius: 16px; }
+  #agendabox { align-items: flex-start; padding-top: 3vh; }  /* clear of the keyboard */
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -431,6 +459,7 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
   <button id="questions" type="button">Questions</button>
   <button id="reset" type="button">Reset</button>
   <button id="settime" type="button" class="narrow">Set time</button>
+  <button id="agendaOpen" type="button">Agenda</button>
   <button id="mute" type="button" aria-pressed="false">Mute</button>
   <button id="hide" type="button">Hide</button>
 </div>
@@ -460,6 +489,24 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
       <button type="button" id="keyCancel">Cancel</button>
     </div>
     <p class="help">Without a key this screen is view only.</p>
+  </form>
+</div>
+<div id="agendabox" class="overlay">
+  <form id="agendaForm">
+    <h2>Agenda</h2>
+    <div class="row">
+      <label for="agendaEnd">Ends at</label>
+      <input id="agendaEnd" type="time" required aria-label="Meeting end time">
+    </div>
+    <textarea id="agendaText" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="Sales 10&#10;Marketing 8&#10;Demo: Search 7:30" aria-label="Sections, one per line"></textarea>
+    <div class="row">
+      <button type="submit" id="agendaSubmit">Load</button>
+      <button type="button" id="agendaClear">Clear</button>
+      <button type="button" id="agendaCancel">Cancel</button>
+    </div>
+    <p id="agendaSum" class="help"></p>
+    <p id="agendaHelp" class="help"></p>
+    <p id="agendaError"></p>
   </form>
 </div>
 <p id="viewonly">View only</p>
@@ -948,6 +995,102 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
   document.getElementById('pickerCancel').addEventListener('click', closePicker);
   picker.addEventListener('click', (e) => { if (e.target === picker) closePicker(); });
 
+  // Agenda editor (the Agenda button or A; in agenda mode also the two-finger tap)
+
+  const agendabox = document.getElementById('agendabox');
+  const agendaForm = document.getElementById('agendaForm');
+  const agendaEnd = document.getElementById('agendaEnd');
+  const agendaText = document.getElementById('agendaText');
+  const agendaSubmit = document.getElementById('agendaSubmit');
+  const agendaClear = document.getElementById('agendaClear');
+  const agendaSum = document.getElementById('agendaSum');
+  const agendaHelp = document.getElementById('agendaHelp');
+  const agendaError = document.getElementById('agendaError');
+
+  // In a section of a meeting that is still on: saving then edits what is left
+  // instead of starting over. An agenda left running since last time is not that.
+  const agendaRunning = () => inAgenda() && agenda.index >= 0 && agenda.index < agenda.sections.length
+    && serverNow() - agenda.endAt < 3 * 3600 * 1000;
+
+  // "Sales 10" or "Demo: Search 7:30" per line -> { sections } or { error }.
+  function parseAgenda(text) {
+    const sections = [];
+    const lines = text.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      const m = /^(.*\S)\s+(\d{1,3})(?::(\d{2}))?$/.exec(line);
+      const plannedMs = m ? (Number(m[2]) * 60 + Number(m[3] || 0)) * 1000 : 0;
+      if (plannedMs <= 0) return { error: `Line ${i + 1}: use a name and minutes, like Sales 10.` };
+      sections.push({ name: m[1], plannedMs });
+    }
+    if (sections.length === 0) return { error: 'Add at least one section.' };
+    return { sections };
+  }
+
+  // "11:00" -> the next time the clock says that. While running, an unchanged
+  // end time stays the moment it was, even once it has passed.
+  function endAtFor(value) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(value);
+    if (!m) return null;
+    if (agendaRunning() && value === agenda.end) return agenda.endAt;
+    const d = new Date();
+    d.setHours(Number(m[1]), Number(m[2]), 0, 0);
+    if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+    return d.getTime();
+  }
+
+  function reflectAgendaSum() {
+    const parsed = parseAgenda(agendaText.value);
+    const endAt = endAtFor(agendaEnd.value);
+    if (parsed.error || endAt === null) { agendaSum.textContent = ''; return; }
+    const running = agendaRunning();
+    const list = running ? parsed.sections.slice(agenda.index + 1) : parsed.sections;
+    const total = list.reduce((sum, x) => sum + x.plannedMs, 0);
+    const left = Math.max(0, endAt - Date.now());
+    agendaSum.textContent = `${running ? 'Still to come' : 'Planned'} ${formatTime(Math.round(total / 1000))}`
+      + ` · ${formatTime(Math.floor(left / 1000))} left until ${agendaEnd.value}`;
+  }
+
+  function openAgenda(focusInput) {
+    const running = agendaRunning();
+    const nextHour = `${String((new Date().getHours() + 1) % 24).padStart(2, '0')}:00`;
+    agendaError.textContent = '';
+    agendaText.value = agenda ? agenda.text : '';
+    agendaEnd.value = agenda && agenda.end ? agenda.end : nextHour;
+    agendaSubmit.textContent = running ? 'Update' : 'Load';
+    agendaClear.hidden = !inAgenda();
+    agendaHelp.textContent = running
+      ? 'Lines up to the current section stay as they are.'
+      : 'One section per line: a name, then minutes. Sales 10, or Demo 7:30.';
+    reflectAgendaSum();
+    agendabox.classList.add('open');
+    if (focusInput) agendaText.focus();
+  }
+
+  function closeAgenda() {
+    agendaText.blur();
+    agendaEnd.blur();
+    agendabox.classList.remove('open');
+  }
+
+  agendaText.addEventListener('input', () => { agendaError.textContent = ''; reflectAgendaSum(); });
+  agendaEnd.addEventListener('input', () => { agendaError.textContent = ''; reflectAgendaSum(); });
+  agendaForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const parsed = parseAgenda(agendaText.value);
+    const endAt = endAtFor(agendaEnd.value);
+    if (parsed.error || endAt === null) {
+      agendaError.textContent = parsed.error || 'Set the end time.';
+      return;
+    }
+    unlockAudio();
+    send({ type: 'agenda', keep: agendaRunning(), endAt, end: agendaEnd.value, text: agendaText.value, sections: parsed.sections });
+    closeAgenda();
+  });
+  agendaClear.addEventListener('click', () => { send({ type: 'clear' }); closeAgenda(); });
+  document.getElementById('agendaCancel').addEventListener('click', closeAgenda);
+
   // Key prompt (two-finger tap on a view-only screen, or K)
 
   function openKeyBox(focusInput) {
@@ -962,7 +1105,7 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
   }
 
   function overlayOpen() {
-    return pickerOpen() || keybox.classList.contains('open');
+    return pickerOpen() || keybox.classList.contains('open') || agendabox.classList.contains('open');
   }
 
   keyForm.addEventListener('submit', (e) => {
@@ -1105,6 +1248,7 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
   function twoFingerTap() {
     if (buttonsHidden) setButtonsHidden(false);
     else if (!canWrite) openKeyBox(false);
+    else if (inAgenda()) openAgenda(false);
     else openPicker(false);
   }
 
@@ -1114,7 +1258,7 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
 
   const TAP_MAX_MS = 800;
   const TAP_MAX_MOVE_PX = 24;
-  const PASSTHROUGH = '#buttons, #picker, #keybox';  // real buttons and the form get normal browser taps
+  const PASSTHROUGH = '#buttons, #picker, #keybox, #agendabox';  // real buttons and the form get normal browser taps
 
   let touchFingers = 0;
   let touchStart = 0;
@@ -1210,6 +1354,7 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
   onButton(resetBtn, reset);
   onButton(questionsBtn, questions);
   onButton(setTimeBtn, () => { unlockAudio(); openPicker(false); });
+  onButton(document.getElementById('agendaOpen'), () => openAgenda(false));
   onButton(hideBtn, () => setButtonsHidden(true));
   function toggleMute() {
     muted = !muted;
@@ -1222,7 +1367,7 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
   window.addEventListener('keydown', (e) => {
     if (e.repeat) return;
     if (overlayOpen()) {
-      if (e.key === 'Escape') { e.preventDefault(); closePicker(); closeKeyBox(); }
+      if (e.key === 'Escape') { e.preventDefault(); closePicker(); closeKeyBox(); closeAgenda(); }
       return;  // the forms handle typing and Enter
     }
     const k = e.key.toLowerCase();
@@ -1230,7 +1375,8 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
     if (k === 'm') { toggleMute(); return; }
     if (k === 'h') { setButtonsHidden(!buttonsHidden); return; }
     if (!canWrite) return;
-    if (k === 'arrowright' || k === 'n') { e.preventDefault(); openPicker(true); }
+    if (k === 'a' || (inAgenda() && (k === 'arrowright' || k === 'n'))) { e.preventDefault(); openAgenda(true); }
+    else if (k === 'arrowright' || k === 'n') { e.preventDefault(); openPicker(true); }
     else if (k === ' ' || k === 'enter') { e.preventDefault(); toggle(); }
     else if (k === 'arrowleft' || k === 'b') back();
     else if (k === 'r') reset();
