@@ -42,9 +42,12 @@
                                    a name then minutes ("Sales 10", "Demo 7:30"). Load swaps
                                    every screen from the speaker clock to the agenda; Clear
                                    swaps back. The text is kept for next time.
-    Tap, Space or Enter            start, then next section. A section that runs out counts
-                                   up as overtime until then.
-    Back button, B or Left         undo the last one.
+    Tap, Space or Enter            start, pause, resume. A pause stops the section's clock,
+                                   not the meeting's end.
+    Next button or Right           next section. A section that runs out counts up as
+                                   overtime until then.
+    Back button, B or Left         undo the last Next.
+    Two-finger tap, N, Set time    set how much the current section has left, as m:ss.
     Sections get their planned time, or less when the end is near: each one's share
     of what is left (src/worker.js). Edit while running to change what is still to come.
     ?                              list the keys.
@@ -246,11 +249,12 @@ body.view-only { cursor: default; }
 }
 body.view-only #viewonly { display: block; }
 .narrow { display: none; }
-#back { display: none; }
-body[data-mode="agenda"] #back { display: inline-block; }
+#back, #nextBtn { display: none; }
+body[data-mode="agenda"] #back,
+body[data-mode="agenda"] #nextBtn { display: inline-block; }
 body[data-mode="agenda"] #questions,
 body[data-mode="agenda"] #reset,
-body[data-mode="agenda"] #settime { display: none; }
+body[data-mode="agenda"] #presets { display: none; }
 body[data-phase="running"] #reset,
 body.fresh #reset,
 body[data-mode="questions"] #questions { opacity: 0; pointer-events: none; }
@@ -474,6 +478,7 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
 <p id="hint">Tap to start</p>
 <div id="buttons">
   <button id="toggle" type="button" class="narrow">Start</button>
+  <button id="nextBtn" type="button">Next</button>
   <button id="back" type="button">Back</button>
   <button id="questions" type="button">Questions</button>
   <button id="reset" type="button">Reset</button>
@@ -542,8 +547,10 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
       <kbd>N or →</kbd><span>Set the time</span>
       <h3>Agenda</h3>
       <kbd>A</kbd><span>Open the agenda editor</span>
-      <kbd>Space or Enter</kbd><span>Start, then next section</span>
+      <kbd>Space or Enter</kbd><span>Start, pause, resume</span>
+      <kbd>→</kbd><span>Next section</span>
       <kbd>B or ←</kbd><span>Back one section</span>
+      <kbd>N</kbd><span>Set the time left in the section</span>
       <h3>This screen</h3>
       <kbd>M</kbd><span>Mute or unmute</span>
       <kbd>H</kbd><span>Hide or show the buttons</span>
@@ -754,7 +761,9 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
     } else {
       const i = a.index;
       const { at, budgetMs } = a.starts[i];
-      const left = budgetMs - (t - at);
+      const paused = a.pausedAt != null;
+      const spent = (paused ? a.pausedAt : t) - at;  // a pause stops the section's clock only
+      const left = budgetMs - spent;
       const name = a.sections[i].name;
       if (left > 0) {
         showSeconds(Math.ceil(left / 1000));
@@ -766,10 +775,11 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
         label.textContent = `${name} · over time`;
         color = 'wrap';
       }
+      if (paused) label.textContent += ' · paused';
       nextLine.textContent = i + 1 < n
-        ? `Next: ${a.sections[i + 1].name} ${formatTime(Math.ceil(budgetAt(i + 1, Math.max(t, at + budgetMs)) / 1000))}`
+        ? `Next: ${a.sections[i + 1].name} ${formatTime(Math.ceil(budgetAt(i + 1, t + Math.max(0, left)) / 1000))}`
         : 'Last section';
-      const frac = budgetMs > 0 ? Math.min(1, (t - at) / budgetMs) : 1;
+      const frac = budgetMs > 0 ? Math.max(0, Math.min(1, spent / budgetMs)) : 1;
       p = (planned(0) - planned(i) + a.sections[i].plannedMs * frac) / planned(0);
     }
     fill.style.setProperty('--p', p.toFixed(4));
@@ -810,9 +820,9 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
     if (inAgenda()) {
       const started = agenda.index >= 0;
       const done = agenda.index >= agenda.sections.length;
-      body.dataset.phase = started && !done ? 'running' : 'idle';
-      hint.textContent = '';  // the line under the clock says it
-      toggleBtn.textContent = started ? 'Next' : 'Start';
+      body.dataset.phase = !started || done ? 'idle' : agenda.pausedAt != null ? 'paused' : 'running';
+      hint.textContent = '';  // the lines around the clock say it
+      toggleBtn.textContent = TOGGLE_TEXT[body.dataset.phase];
       body.classList.toggle('done', done);
       return;
     }
@@ -865,8 +875,16 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
     if (!canWrite) return;
     unlockAudio();
     bounce();
-    if (inAgenda()) send({ type: 'next' });
-    else send({ type: state.phase === 'running' ? 'pause' : 'start' });
+    if (!inAgenda()) send({ type: state.phase === 'running' ? 'pause' : 'start' });
+    else if (agenda.index < 0) send({ type: 'next' });  // the first section
+    else if (agenda.index < agenda.sections.length) send({ type: agenda.pausedAt != null ? 'start' : 'pause' });
+  }
+
+  // Agenda only: on to the next section.
+  function nextSection() {
+    if (!canWrite || !inAgenda()) return;
+    unlockAudio();
+    send({ type: 'next' });
   }
 
   // Agenda only: undo the last Next.
@@ -1013,6 +1031,7 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
   function openPicker(focusInput) {
     pickerError.textContent = '';
     pickerInput.value = '';
+    picker.querySelector('h2').textContent = inAgenda() ? 'Set the time left in this section' : 'Set the speaking clock';
     picker.classList.add('open');
     if (focusInput) pickerInput.focus();
   }
@@ -1038,12 +1057,13 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
       return;
     }
     const remaining = Math.max(1000, Math.min(MAX_SECONDS * 1000, ms));
-    applyElapsed(SPEAK_MS - remaining);
+    if (inAgenda()) { closePicker(); send({ type: 'set', leftMs: remaining }); }
+    else applyElapsed(SPEAK_MS - remaining);
   });
   document.getElementById('pickerCancel').addEventListener('click', closePicker);
   picker.addEventListener('click', (e) => { if (e.target === picker) closePicker(); });
 
-  // Agenda editor (the Agenda button or A; in agenda mode also the two-finger tap)
+  // Agenda editor (the Agenda button or A)
 
   const agendabox = document.getElementById('agendabox');
   const agendaForm = document.getElementById('agendaForm');
@@ -1312,7 +1332,6 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
   function twoFingerTap() {
     if (buttonsHidden) setButtonsHidden(false);
     else if (!canWrite) openKeyBox(false);
-    else if (inAgenda()) openAgenda(false);
     else openPicker(false);
   }
 
@@ -1414,6 +1433,7 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
     });
   }
   onButton(toggleBtn, toggle);
+  onButton(document.getElementById('nextBtn'), nextSection);
   onButton(backBtn, back);
   onButton(resetBtn, reset);
   onButton(questionsBtn, questions);
@@ -1441,7 +1461,8 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
     if (k === 'm') { toggleMute(); return; }
     if (k === 'h') { setButtonsHidden(!buttonsHidden); return; }
     if (!canWrite) return;
-    if (k === 'a' || (inAgenda() && (k === 'arrowright' || k === 'n'))) { e.preventDefault(); openAgenda(true); }
+    if (k === 'a') { e.preventDefault(); openAgenda(true); }
+    else if (k === 'arrowright' && inAgenda()) nextSection();
     else if (k === 'arrowright' || k === 'n') { e.preventDefault(); openPicker(true); }
     else if (k === ' ' || k === 'enter') { e.preventDefault(); toggle(); }
     else if (k === 'arrowleft' || k === 'b') back();

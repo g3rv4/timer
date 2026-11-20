@@ -9,6 +9,8 @@
 // sections with planned lengths and a fixed meeting end. Each section's budget
 // is set when it starts: its plan, shrunk in proportion when the time left
 // until the end no longer covers the plan of it and everything after it.
+// Pausing stops the section's clock but not the meeting's end, so the pause
+// comes out of the sections still to come.
 
 export default {
   async fetch(request, env) {
@@ -37,7 +39,8 @@ export class TimerRoom {
     this.ctx = ctx;
     this.env = env;
     this.state = freshState();
-    // null, or { active, endAt, lengthMs, end, text, sections: [{ name, plannedMs }], index, starts: [{ at, budgetMs }] }.
+    // null, or { active, endAt, lengthMs, end, text, sections: [{ name, plannedMs }], index, starts: [{ at, budgetMs }], pausedAt }.
+    // pausedAt is when the current section was paused, or null while it runs.
     // index is -1 before the first section starts and sections.length when done;
     // end and text are what was typed, kept to prefill the editor. lengthMs is
     // how long the meeting is meant to be; endAt minus it is the scheduled start.
@@ -81,17 +84,30 @@ export class TimerRoom {
     }
 
     const inAgenda = !!(this.agenda && this.agenda.active);
-    if (inAgenda && ['start', 'pause', 'reset', 'questions', 'set'].includes(msg.type)) return;
+    if (inAgenda && ['reset', 'questions'].includes(msg.type)) return;
+    const inSection = inAgenda && this.agenda.index >= 0 && this.agenda.index < this.agenda.sections.length;
 
     const s = this.state;
     const elapsed = () => (s.phase === 'running' ? now - s.startedAt : s.elapsedMs);
     switch (msg.type) {
       case 'start':
+        if (inAgenda) {  // resume the paused section
+          const a = this.agenda;
+          if (a.pausedAt == null) return;
+          a.starts[a.index].at += now - a.pausedAt;
+          a.pausedAt = null;
+          break;
+        }
         if (s.phase === 'running') return;
         s.startedAt = now - s.elapsedMs;
         s.phase = 'running';
         break;
       case 'pause':
+        if (inAgenda) {
+          if (!inSection || this.agenda.pausedAt != null) return;
+          this.agenda.pausedAt = now;
+          break;
+        }
         if (s.phase !== 'running') return;
         s.elapsedMs = now - s.startedAt;
         s.startedAt = null;
@@ -111,6 +127,15 @@ export class TimerRoom {
         break;
       }
       case 'set': {
+        if (inAgenda) {  // the current section has leftMs to go; more than its budget raises the budget
+          const a = this.agenda;
+          const left = Number(msg.leftMs);
+          if (!inSection || !Number.isFinite(left) || left < 0) return;
+          const start = a.starts[a.index];
+          start.budgetMs = Math.max(start.budgetMs, left);
+          start.at = (a.pausedAt ?? now) - (start.budgetMs - left);
+          break;
+        }
         const e = Number(msg.elapsedMs);
         if (!Number.isFinite(e)) return;
         s.questionsAt = null;
@@ -137,6 +162,7 @@ export class TimerRoom {
           sections,
           index: keep ? a.index : -1,
           starts: keep ? a.starts : [],
+          pausedAt: keep ? a.pausedAt ?? null : null,
         };
         if (!keep) this.state = freshState();
         break;
@@ -145,6 +171,7 @@ export class TimerRoom {
         const a = this.agenda;
         if (!inAgenda || a.index >= a.sections.length) return;
         a.index += 1;
+        a.pausedAt = null;
         if (a.index < a.sections.length) {
           const rest = a.sections.slice(a.index).reduce((sum, x) => sum + x.plannedMs, 0);
           const share = Math.min(1, Math.max(0, a.endAt - now) / rest);
@@ -157,13 +184,14 @@ export class TimerRoom {
         const a = this.agenda;
         if (!inAgenda || a.index < 0) return;
         a.index -= 1;
+        a.pausedAt = null;
         a.starts.length = a.index + 1;
         break;
       }
       // Back to the speaker clock. The typed agenda stays for next time.
       case 'clear':
         if (!inAgenda) return;
-        Object.assign(this.agenda, { active: false, index: -1, starts: [] });
+        Object.assign(this.agenda, { active: false, index: -1, starts: [], pausedAt: null });
         this.state = freshState();
         break;
       default:
