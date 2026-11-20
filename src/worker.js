@@ -4,6 +4,11 @@
 // Control needs the key in the TIMER_KEY secret, offered as ?key= on the
 // socket URL. A socket without it (or with the wrong one) can only watch.
 // With no secret configured at all, every socket can control.
+//
+// An agenda, when one is active, replaces the speaker clock: a list of
+// sections with planned lengths and a fixed meeting end. Each section's budget
+// is set when it starts: its plan, shrunk in proportion when the time left
+// until the end no longer covers the plan of it and everything after it.
 
 export default {
   async fetch(request, env) {
@@ -20,14 +25,26 @@ function freshState() {
   return { phase: 'idle', startedAt: null, elapsedMs: 0, questionsAt: null, barStartMs: 0 };
 }
 
+function cleanSections(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 50)
+    .map((x) => ({ name: String((x && x.name) || '').trim().slice(0, 60), plannedMs: Number(x && x.plannedMs) }))
+    .filter((x) => x.name && Number.isFinite(x.plannedMs) && x.plannedMs > 0);
+}
+
 export class TimerRoom {
   constructor(ctx, env) {
     this.ctx = ctx;
     this.env = env;
     this.state = freshState();
+    // null, or { active, endAt, end, text, sections: [{ name, plannedMs }], index, starts: [{ at, budgetMs }] }.
+    // index is -1 before the first section starts and sections.length when done;
+    // end and text are what was typed, kept to prefill the editor.
+    this.agenda = null;
     ctx.blockConcurrencyWhile(async () => {
       const saved = await ctx.storage.get('state');
       if (saved) this.state = saved;
+      this.agenda = (await ctx.storage.get('agenda')) || null;
     });
   }
 
@@ -43,7 +60,7 @@ export class TimerRoom {
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment({ canWrite });  // survives hibernation
-    server.send(JSON.stringify({ type: 'state', state: this.state, now: Date.now(), cause: 'sync', canWrite }));
+    server.send(JSON.stringify({ type: 'state', state: this.state, agenda: this.agenda, now: Date.now(), cause: 'sync', canWrite }));
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -61,6 +78,9 @@ export class TimerRoom {
       ws.send(JSON.stringify({ type: 'denied' }));
       return;
     }
+
+    const inAgenda = !!(this.agenda && this.agenda.active);
+    if (inAgenda && ['start', 'pause', 'reset', 'questions', 'set'].includes(msg.type)) return;
 
     const s = this.state;
     const elapsed = () => (s.phase === 'running' ? now - s.startedAt : s.elapsedMs);
@@ -98,12 +118,58 @@ export class TimerRoom {
         else s.elapsedMs = e;
         break;
       }
+      // Load an agenda, or with keep: true edit the one that is running: the
+      // sections up to the current one stay as they are, the rest are replaced.
+      case 'agenda': {
+        const endAt = Number(msg.endAt);
+        let sections = cleanSections(msg.sections);
+        if (!Number.isFinite(endAt) || sections.length === 0) return;
+        const a = this.agenda;
+        const keep = !!msg.keep && inAgenda && a.index >= 0 && a.index < a.sections.length;
+        if (keep) sections = a.sections.slice(0, a.index + 1).concat(sections.slice(a.index + 1));
+        this.agenda = {
+          active: true,
+          endAt,
+          end: String(msg.end || '').slice(0, 10),
+          text: String(msg.text || '').slice(0, 5000),
+          sections,
+          index: keep ? a.index : -1,
+          starts: keep ? a.starts : [],
+        };
+        if (!keep) this.state = freshState();
+        break;
+      }
+      case 'next': {
+        const a = this.agenda;
+        if (!inAgenda || a.index >= a.sections.length) return;
+        a.index += 1;
+        if (a.index < a.sections.length) {
+          const rest = a.sections.slice(a.index).reduce((sum, x) => sum + x.plannedMs, 0);
+          const share = Math.min(1, Math.max(0, a.endAt - now) / rest);
+          a.starts.push({ at: now, budgetMs: a.sections[a.index].plannedMs * share });
+        }
+        break;
+      }
+      // Undo a Next: the previous section resumes with its original start and budget.
+      case 'back': {
+        const a = this.agenda;
+        if (!inAgenda || a.index < 0) return;
+        a.index -= 1;
+        a.starts.length = a.index + 1;
+        break;
+      }
+      // Back to the speaker clock. The typed agenda stays for next time.
+      case 'clear':
+        if (!inAgenda) return;
+        Object.assign(this.agenda, { active: false, index: -1, starts: [] });
+        this.state = freshState();
+        break;
       default:
         return;
     }
 
-    await this.ctx.storage.put('state', this.state);
-    this.broadcast({ type: 'state', state: this.state, now, cause: msg.type });
+    await this.ctx.storage.put({ state: this.state, agenda: this.agenda });
+    this.broadcast({ type: 'state', state: this.state, agenda: this.agenda, now, cause: msg.type });
   }
 
   broadcast(obj) {

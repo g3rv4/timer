@@ -128,6 +128,22 @@ body[data-mode="questions"] #label {
   color: #fff;
   opacity: 1;
 }
+body[data-mode="agenda"] #label {
+  font-size: max(5vw, 22px);
+  font-weight: 800;
+  opacity: 1;
+}
+#next {
+  display: none;
+  min-height: 1.3em;
+  margin-top: 1vh;
+  font-size: max(2.8vw, 16px);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  opacity: 0.75;
+}
+body[data-mode="agenda"] #next { display: block; }
+body.done #clock, body.done #next { visibility: hidden; }
 #clock {
   display: flex;
   align-items: center;
@@ -218,6 +234,11 @@ body.view-only { cursor: default; }
 }
 body.view-only #viewonly { display: block; }
 .narrow { display: none; }
+#back { display: none; }
+body[data-mode="agenda"] #back { display: inline-block; }
+body[data-mode="agenda"] #questions,
+body[data-mode="agenda"] #reset,
+body[data-mode="agenda"] #settime { display: none; }
 body[data-phase="running"] #reset,
 body.fresh #reset,
 body[data-mode="questions"] #questions { opacity: 0; pointer-events: none; }
@@ -249,6 +270,15 @@ body[data-mode="questions"] #questions { opacity: 0; pointer-events: none; }
   transform: scaleX(var(--p, 0));
 }
 body[data-mode="questions"] #bar { opacity: 0; }
+/* Agenda: the bar is the whole meeting, one segment per section. */
+body[data-mode="agenda"] #bar { height: 2.4vh; }
+#segs {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+#segs span { border-right: 0.3vw solid var(--bg); }
+#segs span:last-child { border-right: 0; }
 
 #flash {
   position: absolute;
@@ -391,11 +421,13 @@ body[data-mode="questions"] #bar { opacity: 0; }
 <main id="stage">
   <p id="label"></p>
   <div id="clock"><span class="slot"></span><span class="slot"></span><span class="colon">:</span><span class="slot"></span><span class="slot"></span></div>
+  <p id="next"></p>
 </main>
 <p id="loading">Connecting</p>
 <p id="hint">Tap to start</p>
 <div id="buttons">
   <button id="toggle" type="button" class="narrow">Start</button>
+  <button id="back" type="button">Back</button>
   <button id="questions" type="button">Questions</button>
   <button id="reset" type="button">Reset</button>
   <button id="settime" type="button" class="narrow">Set time</button>
@@ -403,7 +435,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
   <button id="hide" type="button">Hide</button>
 </div>
 <p id="link">Connecting</p>
-<div id="bar"><div id="fill"></div></div>
+<div id="bar"><div id="fill"></div><div id="segs"></div></div>
 <div id="flash"></div>
 <p id="rotate">Rotate to landscape</p>
 <div id="picker" class="overlay">
@@ -464,7 +496,10 @@ body[data-mode="questions"] #bar { opacity: 0; }
   const fill = document.getElementById('fill');
   const flash = document.getElementById('flash');
   const link = document.getElementById('link');
+  const nextLine = document.getElementById('next');
+  const segs = document.getElementById('segs');
   const toggleBtn = document.getElementById('toggle');
+  const backBtn = document.getElementById('back');
   const resetBtn = document.getElementById('reset');
   const questionsBtn = document.getElementById('questions');
   const setTimeBtn = document.getElementById('settime');
@@ -501,6 +536,8 @@ body[data-mode="questions"] #bar { opacity: 0; }
   // Shared state, mirrored from the server. Every device renders from the same
   // timestamps, so they agree to within the clock offset measured below.
   let state = { phase: 'idle', startedAt: null, elapsedMs: 0, questionsAt: null, barStartMs: 0 };
+  // The agenda, when one is active, takes over the screen from the speaker clock.
+  let agenda = null;
   let clockOffset = 0;  // server clock minus ours, in ms
   let rafId = 0;
   let shownDigits = [];
@@ -511,6 +548,8 @@ body[data-mode="questions"] #bar { opacity: 0; }
   const serverNow = () => Date.now() + clockOffset;
   const elapsed = () => (state.phase === 'running' ? serverNow() - state.startedAt : state.elapsedMs);
   const questionsStart = () => (state.questionsAt === null ? CUTOFF_MS : state.questionsAt);
+  const inAgenda = () => !!(agenda && agenda.active);
+  const live = () => inAgenda() || state.phase === 'running';  // the screen is changing by itself
 
   function modeFor(e) {
     if (e >= questionsStart()) return 'questions';
@@ -555,6 +594,18 @@ body[data-mode="questions"] #bar { opacity: 0; }
     if (mode === 'questions') secs = Math.floor((e - questionsStart()) / 1000);
     else if (mode === 'grace') secs = Math.ceil((CUTOFF_MS - e) / 1000);
     else secs = Math.ceil((SPEAK_MS - e) / 1000);
+    showSeconds(secs);
+
+    body.dataset.mode = mode;
+    label.textContent = LABELS[mode];
+
+    const p = (e - state.barStartMs) / (CUTOFF_MS - state.barStartMs);
+    fill.style.setProperty('--p', Math.max(0, Math.min(1, p)).toFixed(4));
+
+    setColor(colorFor(e, mode), opts);
+  }
+
+  function showSeconds(secs) {
     secs = Math.max(0, Math.min(MAX_SECONDS, secs));
     const m = Math.floor(secs / 60);
     const s = secs % 60;
@@ -567,14 +618,9 @@ body[data-mode="questions"] #bar { opacity: 0; }
     });
     slots[0].classList.toggle('off', digits[0] === 0);
     shownDigits = digits;
+  }
 
-    body.dataset.mode = mode;
-    label.textContent = LABELS[mode];
-
-    const p = (e - state.barStartMs) / (CUTOFF_MS - state.barStartMs);
-    fill.style.setProperty('--p', Math.max(0, Math.min(1, p)).toFixed(4));
-
-    const color = colorFor(e, mode);
+  function setColor(color, opts) {
     if (color !== shownColor) {
       const crossed = shownColor !== null;
       shownColor = color;
@@ -586,6 +632,63 @@ body[data-mode="questions"] #bar { opacity: 0; }
         else if (color === 'blue') longChime();
       }
     }
+  }
+
+  // Agenda display. Before the start: the first section and the budget it
+  // would get right now. In a section: its countdown, then a count-up of the
+  // overtime. After the last one: Done.
+  function renderAgenda(opts = LIVE) {
+    const a = agenda;
+    const t = serverNow();
+    const n = a.sections.length;
+    const planned = (from) => a.sections.slice(from).reduce((sum, x) => sum + x.plannedMs, 0);
+    // What section i would get if it started at `at`: its plan, shrunk when time is short.
+    const budgetAt = (i, at) => a.sections[i].plannedMs * Math.min(1, Math.max(0, a.endAt - at) / planned(i));
+    let color = 'green';
+    let p = 0;
+    body.dataset.mode = 'agenda';
+    if (a.index < 0) {
+      showSeconds(Math.ceil(budgetAt(0, t) / 1000));
+      label.textContent = `Up first: ${a.sections[0].name}`;
+      nextLine.textContent = [a.end && `Ends ${a.end}`, canWrite && 'tap to start'].filter(Boolean).join(' · ');
+    } else if (a.index >= n) {
+      color = 'blue';
+      p = 1;
+      label.textContent = 'Done';
+      nextLine.textContent = '';
+    } else {
+      const i = a.index;
+      const { at, budgetMs } = a.starts[i];
+      const left = budgetMs - (t - at);
+      const name = a.sections[i].name;
+      if (left > 0) {
+        showSeconds(Math.ceil(left / 1000));
+        label.textContent = name;
+        if (left <= Math.min(RED_AT_SECONDS * 1000, budgetMs * 0.1)) color = 'red';
+        else if (left <= Math.min(YELLOW_AT_SECONDS * 1000, budgetMs * 0.25)) color = 'yellow';
+      } else {
+        showSeconds(Math.floor(-left / 1000));
+        label.textContent = `${name} · over time`;
+        color = 'wrap';
+      }
+      nextLine.textContent = i + 1 < n
+        ? `Next: ${a.sections[i + 1].name} ${formatTime(Math.ceil(budgetAt(i + 1, Math.max(t, at + budgetMs)) / 1000))}`
+        : 'Last section';
+      const frac = budgetMs > 0 ? Math.min(1, (t - at) / budgetMs) : 1;
+      p = (planned(0) - planned(i) + a.sections[i].plannedMs * frac) / planned(0);
+    }
+    fill.style.setProperty('--p', p.toFixed(4));
+    setColor(color, opts);
+  }
+
+  function buildSegments() {
+    segs.textContent = '';
+    if (!inAgenda()) return;
+    agenda.sections.forEach((x) => {
+      const seg = document.createElement('span');
+      seg.style.flexGrow = x.plannedMs;
+      segs.appendChild(seg);
+    });
   }
 
   function pulse() {
@@ -609,6 +712,16 @@ body[data-mode="questions"] #bar { opacity: 0; }
   }
 
   function reflectPhase() {
+    if (inAgenda()) {
+      const started = agenda.index >= 0;
+      const done = agenda.index >= agenda.sections.length;
+      body.dataset.phase = started && !done ? 'running' : 'idle';
+      hint.textContent = '';  // the line under the clock says it
+      toggleBtn.textContent = started ? 'Next' : 'Start';
+      body.classList.toggle('done', done);
+      return;
+    }
+    body.classList.remove('done');
     body.dataset.phase = state.phase;
     hint.textContent = HINTS[state.phase];
     toggleBtn.textContent = TOGGLE_TEXT[state.phase];
@@ -616,8 +729,9 @@ body[data-mode="questions"] #bar { opacity: 0; }
   }
 
   function tick() {
-    if (state.phase !== 'running') return;
-    render(elapsed());
+    if (!live()) return;
+    if (inAgenda()) renderAgenda();
+    else render(elapsed());
     rafId = requestAnimationFrame(tick);
   }
 
@@ -625,6 +739,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
   // decides whether a color change may sound.
   function applyState(msg) {
     state = msg.state;
+    agenda = msg.agenda || null;
     const cause = msg.cause;
     if (cause === 'sync') {
       body.classList.remove('loading');
@@ -637,8 +752,10 @@ body[data-mode="questions"] #bar { opacity: 0; }
     reflectPhase();
     if (cause === 'start' || cause === 'pause') bounce();
     cancelAnimationFrame(rafId);
-    render(elapsed(), opts);
-    if (state.phase === 'running') {
+    buildSegments();
+    if (inAgenda()) renderAgenda(opts);
+    else render(elapsed(), opts);
+    if (live()) {
       requestWakeLock();
       rafId = requestAnimationFrame(tick);
     } else {
@@ -653,7 +770,14 @@ body[data-mode="questions"] #bar { opacity: 0; }
     if (!canWrite) return;
     unlockAudio();
     bounce();
-    send({ type: state.phase === 'running' ? 'pause' : 'start' });
+    if (inAgenda()) send({ type: 'next' });
+    else send({ type: state.phase === 'running' ? 'pause' : 'start' });
+  }
+
+  // Agenda only: undo the last Next.
+  function back() {
+    if (!canWrite || !inAgenda()) return;
+    send({ type: 'back' });
   }
 
   function reset() {
@@ -753,7 +877,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
     if (document.visibilityState !== 'visible') return;
     connect();
     ping();
-    if (state.phase !== 'running') return;
+    if (!live()) return;
     if (!wakeLock) requestWakeLock();
     cancelAnimationFrame(rafId);
     tick();
@@ -953,7 +1077,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
     if (!('wakeLock' in navigator)) return;
     try {
       const lock = await navigator.wakeLock.request('screen');
-      if (state.phase !== 'running') { lock.release().catch(() => {}); return; }
+      if (!live()) { lock.release().catch(() => {}); return; }
       wakeLock = lock;
       lock.addEventListener('release', () => { if (wakeLock === lock) wakeLock = null; });
     } catch (_) {
@@ -1082,6 +1206,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
     });
   }
   onButton(toggleBtn, toggle);
+  onButton(backBtn, back);
   onButton(resetBtn, reset);
   onButton(questionsBtn, questions);
   onButton(setTimeBtn, () => { unlockAudio(); openPicker(false); });
@@ -1107,6 +1232,7 @@ body[data-mode="questions"] #bar { opacity: 0; }
     if (!canWrite) return;
     if (k === 'arrowright' || k === 'n') { e.preventDefault(); openPicker(true); }
     else if (k === ' ' || k === 'enter') { e.preventDefault(); toggle(); }
+    else if (k === 'arrowleft' || k === 'b') back();
     else if (k === 'r') reset();
     else if (k === 'q') questions();
   });
