@@ -676,9 +676,9 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
     slot.appendChild(next);
     if (!old) return;
     if (!animate || reduceMotion) { old.remove(); return; }
-    const opts = { duration: 320, easing: 'cubic-bezier(.2,.7,.2,1)', fill: 'forwards' };
-    next.animate([{ transform: 'translateY(-100%)', opacity: 0 }, { transform: 'translateY(0)', opacity: 1 }], opts);
-    const out = old.animate([{ transform: 'translateY(0)', opacity: 1 }, { transform: 'translateY(100%)', opacity: 0 }], opts);
+    const opts = { duration: 160, easing: 'ease-out', fill: 'forwards' };
+    next.animate([{ opacity: 0 }, { opacity: 1 }], opts);
+    const out = old.animate([{ opacity: 1 }, { opacity: 0 }], opts);
     out.onfinish = () => old.remove();
   }
 
