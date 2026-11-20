@@ -37,7 +37,8 @@
                                    a keyboard. Without it the page is view only: just Mute
                                    and Hide, taps ignored.
   Agenda
-    Agenda button or A             type the meeting: an end time and one section per line,
+    Agenda button or A             type the meeting: an end time, its length (60 minutes
+                                   unless changed) and one section per line,
                                    a name then minutes ("Sales 10", "Demo 7:30"). Load swaps
                                    every screen from the speaker clock to the agenda; Clear
                                    swaps back. The text is kept for next time.
@@ -46,6 +47,7 @@
     Back button, B or Left         undo the last one.
     Sections get their planned time, or less when the end is near: each one's share
     of what is left (src/worker.js). Edit while running to change what is still to come.
+    ?                              list the keys.
   On a phone the controls are a button row at the bottom.
   The timing constants are at the top of the script.
 -->
@@ -366,6 +368,7 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
 }
 .overlay input:focus, .overlay textarea:focus { outline: 0.2em solid var(--green); }
 #agendaEnd { width: auto; }
+#agendaLength { width: 5ch; }
 .overlay textarea {
   display: block;
   width: 100%;
@@ -382,6 +385,22 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
   -webkit-user-select: text;
   user-select: text;
 }
+#helpList {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3em 1.4em;
+  margin-bottom: max(1.6vw, 12px);
+  font-size: max(1.5vw, 13px);
+}
+#helpList h3 {
+  grid-column: 1 / -1;
+  margin-top: 0.5em;
+  font-size: inherit;
+  font-weight: 800;
+  opacity: 0.6;
+}
+#helpList h3:first-child { margin-top: 0; }
+#helpList kbd { font: inherit; font-weight: 700; white-space: nowrap; }
 .overlay .help {
   margin-top: max(1.2vw, 10px);
   font-size: max(1.7vw, 13px);
@@ -497,6 +516,9 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
     <div class="row">
       <label for="agendaEnd">Ends at</label>
       <input id="agendaEnd" type="time" required aria-label="Meeting end time">
+      <label for="agendaLength">Length</label>
+      <input id="agendaLength" type="text" inputmode="numeric" autocomplete="off" aria-label="Meeting length in minutes">
+      <span>min</span>
     </div>
     <textarea id="agendaText" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="Sales 10&#10;Marketing 8&#10;Demo: Search 7:30" aria-label="Sections, one per line"></textarea>
     <div class="row">
@@ -507,6 +529,30 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
     <p id="agendaSum" class="help"></p>
     <p id="agendaHelp" class="help"></p>
     <p id="agendaError"></p>
+  </form>
+</div>
+<div id="helpbox" class="overlay">
+  <form id="helpForm">
+    <h2>Keys</h2>
+    <div id="helpList">
+      <h3>Speaker clock</h3>
+      <kbd>Space or Enter</kbd><span>Start, pause, resume</span>
+      <kbd>Q</kbd><span>Jump to questions</span>
+      <kbd>R</kbd><span>Reset</span>
+      <kbd>N or →</kbd><span>Set the time</span>
+      <h3>Agenda</h3>
+      <kbd>A</kbd><span>Open the agenda editor</span>
+      <kbd>Space or Enter</kbd><span>Start, then next section</span>
+      <kbd>B or ←</kbd><span>Back one section</span>
+      <h3>This screen</h3>
+      <kbd>M</kbd><span>Mute or unmute</span>
+      <kbd>H</kbd><span>Hide or show the buttons</span>
+      <kbd>K</kbd><span>Enter the control key</span>
+      <kbd>?</kbd><span>Show or close this list</span>
+    </div>
+    <div class="row">
+      <button type="submit">Close</button>
+    </div>
   </form>
 </div>
 <p id="viewonly">View only</p>
@@ -697,7 +743,9 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
     if (a.index < 0) {
       showSeconds(Math.ceil(budgetAt(0, t) / 1000));
       label.textContent = `Up first: ${a.sections[0].name}`;
-      nextLine.textContent = [a.end && `Ends ${a.end}`, canWrite && 'tap to start'].filter(Boolean).join(' · ');
+      const late = Math.floor((t - (a.endAt - a.lengthMs)) / 1000);  // past the scheduled start
+      nextLine.textContent = [a.end && `Ends ${a.end}`, late >= 60 && `${formatTime(late)} late`, canWrite && 'tap to start']
+        .filter(Boolean).join(' · ');
     } else if (a.index >= n) {
       color = 'blue';
       p = 1;
@@ -1000,6 +1048,9 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
   const agendabox = document.getElementById('agendabox');
   const agendaForm = document.getElementById('agendaForm');
   const agendaEnd = document.getElementById('agendaEnd');
+  const agendaLength = document.getElementById('agendaLength');
+  const DEFAULT_LENGTH_MIN = 60;
+  const agendaLengthMs = () => (Number(agendaLength.value) > 0 ? Number(agendaLength.value) : DEFAULT_LENGTH_MIN) * 60 * 1000;
   const agendaText = document.getElementById('agendaText');
   const agendaSubmit = document.getElementById('agendaSubmit');
   const agendaClear = document.getElementById('agendaClear');
@@ -1048,7 +1099,10 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
     const list = running ? parsed.sections.slice(agenda.index + 1) : parsed.sections;
     const total = list.reduce((sum, x) => sum + x.plannedMs, 0);
     const left = Math.max(0, endAt - Date.now());
-    agendaSum.textContent = `${running ? 'Still to come' : 'Planned'} ${formatTime(Math.round(total / 1000))}`
+    const over = total - agendaLengthMs();
+    const fit = running ? ''
+      : ` of ${formatTime(agendaLengthMs() / 1000)}${over > 0 ? `, ${formatTime(Math.round(over / 1000))} too long` : ''}`;
+    agendaSum.textContent = `${running ? 'Still to come' : 'Planned'} ${formatTime(Math.round(total / 1000))}${fit}`
       + ` · ${formatTime(Math.floor(left / 1000))} left until ${agendaEnd.value}`;
   }
 
@@ -1058,6 +1112,7 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
     agendaError.textContent = '';
     agendaText.value = agenda ? agenda.text : '';
     agendaEnd.value = agenda && agenda.end ? agenda.end : nextHour;
+    agendaLength.value = agenda && agenda.lengthMs ? agenda.lengthMs / 60000 : DEFAULT_LENGTH_MIN;
     agendaSubmit.textContent = running ? 'Update' : 'Load';
     agendaClear.hidden = !inAgenda();
     agendaHelp.textContent = running
@@ -1076,6 +1131,7 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
 
   agendaText.addEventListener('input', () => { agendaError.textContent = ''; reflectAgendaSum(); });
   agendaEnd.addEventListener('input', () => { agendaError.textContent = ''; reflectAgendaSum(); });
+  agendaLength.addEventListener('input', reflectAgendaSum);
   agendaForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const parsed = parseAgenda(agendaText.value);
@@ -1085,7 +1141,7 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
       return;
     }
     unlockAudio();
-    send({ type: 'agenda', keep: agendaRunning(), endAt, end: agendaEnd.value, text: agendaText.value, sections: parsed.sections });
+    send({ type: 'agenda', keep: agendaRunning(), endAt, lengthMs: agendaLengthMs(), end: agendaEnd.value, text: agendaText.value, sections: parsed.sections });
     closeAgenda();
   });
   agendaClear.addEventListener('click', () => { send({ type: 'clear' }); closeAgenda(); });
@@ -1104,8 +1160,16 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
     keybox.classList.remove('open');
   }
 
+  // Key list (?)
+
+  const helpbox = document.getElementById('helpbox');
+  const closeHelp = () => helpbox.classList.remove('open');
+  document.getElementById('helpForm').addEventListener('submit', (e) => { e.preventDefault(); closeHelp(); });
+  helpbox.addEventListener('click', (e) => { if (e.target === helpbox) closeHelp(); });
+
   function overlayOpen() {
-    return pickerOpen() || keybox.classList.contains('open') || agendabox.classList.contains('open');
+    return pickerOpen() || keybox.classList.contains('open') || agendabox.classList.contains('open')
+      || helpbox.classList.contains('open');
   }
 
   keyForm.addEventListener('submit', (e) => {
@@ -1258,7 +1322,7 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
 
   const TAP_MAX_MS = 800;
   const TAP_MAX_MOVE_PX = 24;
-  const PASSTHROUGH = '#buttons, #picker, #keybox, #agendabox';  // real buttons and the form get normal browser taps
+  const PASSTHROUGH = '#buttons, #picker, #keybox, #agendabox, #helpbox';  // real buttons and the form get normal browser taps
 
   let touchFingers = 0;
   let touchStart = 0;
@@ -1367,10 +1431,12 @@ body[data-mode="agenda"] #bar { height: 2.4vh; }
   window.addEventListener('keydown', (e) => {
     if (e.repeat) return;
     if (overlayOpen()) {
-      if (e.key === 'Escape') { e.preventDefault(); closePicker(); closeKeyBox(); closeAgenda(); }
+      if (e.key === 'Escape') { e.preventDefault(); closePicker(); closeKeyBox(); closeAgenda(); closeHelp(); }
+      else if (e.key === '?' && helpbox.classList.contains('open')) { e.preventDefault(); closeHelp(); }
       return;  // the forms handle typing and Enter
     }
     const k = e.key.toLowerCase();
+    if (k === '?') { helpbox.classList.add('open'); return; }
     if (k === 'k') { openKeyBox(true); return; }
     if (k === 'm') { toggleMute(); return; }
     if (k === 'h') { setButtonsHidden(!buttonsHidden); return; }

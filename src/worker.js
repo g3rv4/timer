@@ -37,9 +37,10 @@ export class TimerRoom {
     this.ctx = ctx;
     this.env = env;
     this.state = freshState();
-    // null, or { active, endAt, end, text, sections: [{ name, plannedMs }], index, starts: [{ at, budgetMs }] }.
+    // null, or { active, endAt, lengthMs, end, text, sections: [{ name, plannedMs }], index, starts: [{ at, budgetMs }] }.
     // index is -1 before the first section starts and sections.length when done;
-    // end and text are what was typed, kept to prefill the editor.
+    // end and text are what was typed, kept to prefill the editor. lengthMs is
+    // how long the meeting is meant to be; endAt minus it is the scheduled start.
     this.agenda = null;
     ctx.blockConcurrencyWhile(async () => {
       const saved = await ctx.storage.get('state');
@@ -130,6 +131,7 @@ export class TimerRoom {
         this.agenda = {
           active: true,
           endAt,
+          lengthMs: Number(msg.lengthMs) > 0 ? Number(msg.lengthMs) : 60 * 60 * 1000,
           end: String(msg.end || '').slice(0, 10),
           text: String(msg.text || '').slice(0, 5000),
           sections,
